@@ -1,0 +1,56 @@
+extends Area3D
+## Player laser projectile. Travels in a straight line and damages enemies/hazards on contact.
+
+var speed: float = 100.0
+var lifetime: float = 2.0
+var damage: float = 25.0
+var direction: Vector3 = Vector3(0, 0, -1)
+
+
+func _ready():
+	add_to_group("player_projectiles")
+	_build_mesh()
+	_build_collision()
+	area_entered.connect(_on_hit)
+
+
+func _process(delta):
+	global_position += direction * speed * delta
+	lifetime -= delta
+	if lifetime <= 0:
+		queue_free()
+
+
+func _on_hit(area: Area3D):
+	if area.is_in_group("enemies") or area.is_in_group("hazards"):
+		if area.has_method("take_damage"):
+			area.take_damage(damage)
+		queue_free()
+
+
+func _build_mesh():
+	var mi := MeshInstance3D.new()
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = 0.05
+	mesh.bottom_radius = 0.05
+	mesh.height = 1.2
+	mi.mesh = mesh
+	mi.rotation_degrees.x = 90
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.3, 1.0, 0.4)
+	mat.emission_enabled = true
+	mat.emission = Color(0.3, 1.0, 0.4)
+	mat.emission_energy_multiplier = 3.0
+	mi.material_override = mat
+	add_child(mi)
+
+
+func _build_collision():
+	var col := CollisionShape3D.new()
+	var shape := CylinderShape3D.new()
+	shape.radius = 0.1
+	shape.height = 1.2
+	col.shape = shape
+	col.rotation_degrees.x = 90
+	add_child(col)
