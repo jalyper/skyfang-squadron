@@ -11,8 +11,8 @@ const HudScript = preload("res://scripts/hud.gd")
 const SquadCommsScript = preload("res://scripts/squad_comms.gd")
 
 # Rail
-var rail_speed: float = 20.0
-var current_speed: float = 20.0
+var rail_speed: float = 16.0
+var current_speed: float = 16.0
 var path: Path3D
 var path_follow: PathFollow3D
 
@@ -25,6 +25,21 @@ var projectiles_container: Node3D
 var hud: Control
 var squad_comms: Control
 var level_complete: bool = false
+var player_dead: bool = false
+var game_over_ui: Control = null
+
+# Shockwave pursuit — boost to outrun
+var shockwave: MeshInstance3D = null
+var shockwave_mat: StandardMaterial3D = null
+var shockwave_active: bool = false
+var shockwave_progress: float = 0.0  # 0-1 along the path
+var shockwave_speed: float = 14.0    # slightly slower than rail_speed — must boost to gain distance
+var shockwave_damage_dist: float = 8.0
+var shockwave_zones: Array = [
+	# [start_ratio, end_ratio] — sections where shockwave activates
+	[0.15, 0.35],   # Act 1-2: chase through city
+	[0.55, 0.72],   # Act 3: trench pursuit
+]
 
 # Comms
 var comms_triggers: Array = []
@@ -36,8 +51,13 @@ func _ready():
 	current_speed = rail_speed
 
 	_create_environment()
+	_create_starfield()
+	_create_nebula()
 	_create_rail_path()
+	_create_path_visuals()
 	_create_containers()
+	_create_buildings()
+	_create_phase_walls()
 	_create_player()
 	_create_camera()
 	_create_hazards()
@@ -47,13 +67,14 @@ func _ready():
 
 
 func _process(delta):
-	if level_complete:
+	if level_complete or player_dead:
 		return
 	path_follow.progress += current_speed * delta
 	if path_follow.progress_ratio >= 1.0:
 		level_complete = true
 		_on_level_complete()
 	_check_comms_triggers()
+	_update_shockwave(delta)
 
 
 # ── Environment ───────────────────────────────────────────────
@@ -77,6 +98,117 @@ func _create_environment():
 	add_child(light)
 
 
+# ── Starfield (parallax white dots) ───────────────────────────
+
+func _create_starfield():
+	# Three layers of stars at different distances for parallax effect
+	# Closer layers move faster relative to camera, giving depth
+	var layers = [
+		{"count": 300, "range": 80,  "depth": 400, "size": 0.08, "brightness": 0.6},   # near stars
+		{"count": 400, "range": 150, "depth": 600, "size": 0.05, "brightness": 0.4},   # mid stars
+		{"count": 500, "range": 250, "depth": 800, "size": 0.03, "brightness": 0.25},  # far stars
+	]
+
+	for layer in layers:
+		var star_container := Node3D.new()
+		star_container.name = "Stars"
+		# Parent to path_follow for parallax — closer stars move more with camera
+		add_child(star_container)
+
+		for i in layer["count"]:
+			var star := MeshInstance3D.new()
+			var mesh := QuadMesh.new()
+			mesh.size = Vector2(layer["size"], layer["size"])
+			star.mesh = mesh
+			star.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+			var mat := StandardMaterial3D.new()
+			var b: float = layer["brightness"] * randf_range(0.5, 1.5)
+			# Slight color variation — some warm, some cool
+			var tint := randf()
+			if tint < 0.3:
+				mat.albedo_color = Color(b, b * 0.9, b * 0.7)  # warm
+			elif tint < 0.6:
+				mat.albedo_color = Color(b * 0.8, b * 0.9, b)  # cool
+			else:
+				mat.albedo_color = Color(b, b, b)  # white
+			mat.emission_enabled = true
+			mat.emission = mat.albedo_color
+			mat.emission_energy_multiplier = 2.0
+			mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+			mat.no_depth_test = true
+			star.material_override = mat
+
+			var r: float = layer["range"]
+			var d: float = layer["depth"]
+			star.position = Vector3(
+				randf_range(-r, r),
+				randf_range(-r * 0.6, r * 0.6),
+				randf_range(-d, 0)  # spread along the path length
+			)
+			star_container.add_child(star)
+
+
+# ── Nebula (distant gas clouds) ───────────────────────────────
+
+func _create_nebula():
+	# Large semi-transparent colored spheres far from the path to simulate gas clouds
+	var nebula_data = [
+		# [position, radius, color]
+		[Vector3(120, 40, -150),  40, Color(0.15, 0.05, 0.25, 0.08)],   # purple haze
+		[Vector3(-150, -20, -300), 55, Color(0.05, 0.1, 0.25, 0.06)],   # blue nebula
+		[Vector3(80, 60, -450),   45, Color(0.2, 0.05, 0.1, 0.07)],     # red/pink cloud
+		[Vector3(-100, 30, -200), 35, Color(0.1, 0.15, 0.2, 0.09)],     # teal wisp
+		[Vector3(60, -40, -520),  50, Color(0.08, 0.05, 0.2, 0.06)],    # deep violet
+		[Vector3(-80, 50, -100),  30, Color(0.15, 0.1, 0.05, 0.08)],    # amber glow
+		[Vector3(140, 10, -550),  60, Color(0.05, 0.08, 0.2, 0.05)],    # distant blue
+	]
+
+	for data in nebula_data:
+		var pos: Vector3 = data[0]
+		var radius: float = data[1]
+		var color: Color = data[2]
+
+		# Each nebula is 2-3 overlapping spheres for organic shape
+		var num_blobs := randi_range(2, 4)
+		for i in num_blobs:
+			var blob := MeshInstance3D.new()
+			var mesh := SphereMesh.new()
+			var blob_r := radius * randf_range(0.6, 1.2)
+			mesh.radius = blob_r
+			mesh.height = blob_r * 2.0
+			blob.mesh = mesh
+			blob.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+			var mat := StandardMaterial3D.new()
+			# Slight color shift per blob
+			mat.albedo_color = Color(
+				color.r + randf_range(-0.03, 0.03),
+				color.g + randf_range(-0.03, 0.03),
+				color.b + randf_range(-0.03, 0.03),
+				color.a * randf_range(0.7, 1.3)
+			)
+			mat.emission_enabled = true
+			mat.emission = Color(color.r * 2, color.g * 2, color.b * 2)
+			mat.emission_energy_multiplier = 0.5
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+			mat.no_depth_test = true
+			blob.material_override = mat
+
+			blob.position = pos + Vector3(
+				randf_range(-radius * 0.4, radius * 0.4),
+				randf_range(-radius * 0.3, radius * 0.3),
+				randf_range(-radius * 0.3, radius * 0.3)
+			)
+			blob.scale = Vector3(
+				randf_range(0.8, 1.3),
+				randf_range(0.6, 1.0),
+				randf_range(0.8, 1.3)
+			)
+			add_child(blob)
+
+
 # ── Rail Path ─────────────────────────────────────────────────
 
 func _create_rail_path():
@@ -84,14 +216,28 @@ func _create_rail_path():
 	var curve = Curve3D.new()
 
 	# Gentle S-curves going forward (-Z), ~300 units total
+	# add_point(position, in_tangent, out_tangent)
+	# in_tangent points BACKWARD (+Z), out_tangent points FORWARD (-Z)
+	# ~600 units, twice as long with varied terrain
 	var pts = [
-		[Vector3(0, 0, 0),       Vector3(),            Vector3(0, 0, -20)],
-		[Vector3(5, 2, -50),     Vector3(0, 0, -20),   Vector3(0, 0, -20)],
-		[Vector3(-5, 0, -100),   Vector3(0, 0, -20),   Vector3(0, 0, -20)],
-		[Vector3(8, -1, -150),   Vector3(0, 0, -20),   Vector3(0, 0, -20)],
-		[Vector3(-3, 3, -200),   Vector3(0, 0, -20),   Vector3(0, 0, -20)],
-		[Vector3(2, 1, -250),    Vector3(0, 0, -20),   Vector3(0, 0, -20)],
-		[Vector3(0, 0, -300),    Vector3(0, 0, -20),   Vector3()],
+		# Act 1: City approach (0 to -135)
+		[Vector3(0, 0, 0),       Vector3(),           Vector3(0, 0, -20)],
+		[Vector3(5, 2, -50),     Vector3(0, 0, 20),   Vector3(0, 0, -20)],
+		[Vector3(0, 1, -100),    Vector3(0, 0, 20),   Vector3(0, 0, -20)],
+		[Vector3(0, 0, -135),    Vector3(0, 0, 20),   Vector3(0, 0, -20)],
+		# Act 2: Phase gauntlet + combat (Z=-170 to -300)
+		[Vector3(5, -1, -170),   Vector3(0, 0, 20),   Vector3(0, 0, -20)],
+		[Vector3(-3, 3, -220),   Vector3(0, 0, 20),   Vector3(0, 0, -20)],
+		[Vector3(0, 0, -280),    Vector3(0, 0, 20),   Vector3(0, 0, -20)],
+		# Act 3: Dive into trench (Z=-300 to -420)
+		[Vector3(0, -5, -320),   Vector3(0, 0, 20),   Vector3(0, -3, -20)],
+		[Vector3(0, -8, -370),   Vector3(0, 0, 20),   Vector3(0, 0, -20)],
+		[Vector3(0, -5, -420),   Vector3(0, 3, 20),   Vector3(0, 0, -20)],
+		# Act 4: Open space asteroid field + final assault (Z=-420 to -600)
+		[Vector3(6, 0, -460),    Vector3(0, 0, 20),   Vector3(0, 0, -20)],
+		[Vector3(-4, 2, -510),   Vector3(0, 0, 20),   Vector3(0, 0, -20)],
+		[Vector3(3, -1, -560),   Vector3(0, 0, 20),   Vector3(0, 0, -20)],
+		[Vector3(0, 0, -600),    Vector3(0, 0, 20),   Vector3()],
 	]
 	for p in pts:
 		curve.add_point(p[0], p[1], p[2])
@@ -103,6 +249,76 @@ func _create_rail_path():
 	path_follow.rotation_mode = PathFollow3D.ROTATION_ORIENTED
 	path_follow.loop = false
 	path.add_child(path_follow)
+
+
+# ── Path Visuals (tunnel feel + end glow) ─────────────────────
+
+func _create_path_visuals():
+	var curve: Curve3D = path.curve
+	var total_len := curve.get_baked_length()
+
+	# Ring markers along the rail every ~25 units
+	var ring_spacing := 25.0
+	var num_rings := int(total_len / ring_spacing)
+	for i in range(1, num_rings + 1):
+		var offset_dist := i * ring_spacing
+		var ratio := offset_dist / total_len
+		var pos: Vector3 = curve.sample_baked(offset_dist)
+
+		var ring_node := MeshInstance3D.new()
+		var ring := TorusMesh.new()
+		ring.inner_radius = 4.0
+		ring.outer_radius = 4.4
+		ring.rings = 16
+		ring.ring_segments = 24
+		ring_node.mesh = ring
+
+		var mat := StandardMaterial3D.new()
+		# Rings get brighter toward the end
+		var brightness := lerpf(0.15, 0.6, ratio)
+		mat.albedo_color = Color(0.2 * brightness, 0.4 * brightness, 1.0 * brightness, 0.4)
+		mat.emission_enabled = true
+		mat.emission = Color(0.2, 0.4, 1.0) * brightness
+		mat.emission_energy_multiplier = lerpf(0.5, 2.5, ratio)
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.no_depth_test = false
+		ring_node.material_override = mat
+		ring_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+		ring_node.position = pos
+		# Orient ring to face along path direction
+		var next_pos: Vector3 = curve.sample_baked(minf(offset_dist + 1.0, total_len))
+		var forward := (next_pos - pos).normalized()
+		if forward.length() > 0.01:
+			ring_node.look_at(pos + forward, Vector3.UP)
+		add_child(ring_node)
+
+	# End-of-tunnel glow: bright light + emissive sphere at path end
+	var end_pos: Vector3 = curve.sample_baked(total_len)
+
+	var glow_light := OmniLight3D.new()
+	glow_light.position = end_pos
+	glow_light.light_energy = 4.0
+	glow_light.light_color = Color(0.5, 0.7, 1.0)
+	glow_light.omni_range = 60.0
+	glow_light.omni_attenuation = 1.5
+	add_child(glow_light)
+
+	var glow_sphere := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = 8.0
+	sphere.height = 16.0
+	glow_sphere.mesh = sphere
+	glow_sphere.position = end_pos
+	glow_sphere.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var glow_mat := StandardMaterial3D.new()
+	glow_mat.albedo_color = Color(0.4, 0.6, 1.0, 0.2)
+	glow_mat.emission_enabled = true
+	glow_mat.emission = Color(0.4, 0.6, 1.0)
+	glow_mat.emission_energy_multiplier = 4.0
+	glow_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	glow_sphere.material_override = glow_mat
+	add_child(glow_sphere)
 
 
 # ── Containers ────────────────────────────────────────────────
@@ -131,6 +347,7 @@ func _create_player():
 	player.set_script(PlayerShipScript)
 	path_follow.add_child(player)
 	GameManager.player = player
+	player.ship_destroyed.connect(_on_player_destroyed)
 
 
 # ── Camera ────────────────────────────────────────────────────
@@ -144,21 +361,172 @@ func _create_camera():
 	add_child(rail_camera)
 
 
-# ── Hazards ───────────────────────────────────────────────────
+# ── Buildings (cityscape obstacles) ───────────────────────────
+
+func _create_buildings():
+	var building_data = [
+		# [position, size] — city outskirts (Z=-30 to -55)
+		[Vector3(15, 5, -35),  Vector3(6, 12, 6)],
+		[Vector3(-14, 8, -45), Vector3(8, 18, 8)],
+		[Vector3(18, 4, -55),  Vector3(5, 10, 5)],
+
+		# City proper (Z=-60 to -95)
+		[Vector3(10, 6, -65),  Vector3(6, 14, 8)],
+		[Vector3(-10, 7, -70), Vector3(7, 16, 6)],
+		[Vector3(12, 5, -85),  Vector3(5, 12, 5)],
+		[Vector3(-12, 8, -90), Vector3(8, 18, 6)],
+
+		# Narrow corridor walls (Z=-105 to -135) — must tilt to fit
+		# Walls are wide apart with tall height to create canyon feel
+		[Vector3(7, 8, -120),  Vector3(3, 18, 35)],
+		[Vector3(-7, 8, -120), Vector3(3, 18, 35)],
+
+		# Dense combat area (Z=-185 to -240)
+		[Vector3(14, 6, -185),  Vector3(6, 14, 8)],
+		[Vector3(-13, 7, -195), Vector3(7, 16, 6)],
+		[Vector3(10, 5, -210),  Vector3(5, 12, 10)],
+		[Vector3(-11, 8, -225), Vector3(8, 18, 8)],
+		[Vector3(16, 4, -235),  Vector3(4, 10, 4)],
+		[Vector3(-15, 6, -240), Vector3(6, 14, 6)],
+
+		# Transition zone (Z=-260 to -300)
+		[Vector3(12, 7, -265),  Vector3(5, 16, 5)],
+		[Vector3(-13, 5, -275), Vector3(6, 12, 6)],
+		[Vector3(8, 10, -290),  Vector3(4, 22, 4)],
+
+		# === ACT 3: Trench dive (Z=-300 to -420) ===
+		# Trench walls — tall narrow canyon going down
+		[Vector3(6, -4, -330),  Vector3(3, 12, 40)],
+		[Vector3(-6, -4, -330), Vector3(3, 12, 40)],
+		# Overhanging structures in trench
+		[Vector3(4, 2, -350),   Vector3(8, 2, 4)],   # ceiling beam
+		[Vector3(-3, 3, -380),  Vector3(6, 2, 4)],   # ceiling beam
+		# Trench exit pillars
+		[Vector3(5, -2, -410),  Vector3(3, 8, 3)],
+		[Vector3(-5, -2, -415), Vector3(3, 8, 3)],
+
+		# === ACT 4: Open space ruins (Z=-430 to -580) ===
+		# Floating ruined structures
+		[Vector3(16, 3, -440),  Vector3(5, 8, 5)],
+		[Vector3(-14, 5, -460), Vector3(6, 10, 6)],
+		[Vector3(12, -2, -490), Vector3(4, 6, 8)],
+		[Vector3(-10, 4, -510), Vector3(7, 12, 5)],
+		[Vector3(18, 1, -530),  Vector3(5, 8, 5)],
+		[Vector3(-16, 6, -550), Vector3(6, 14, 6)],
+		[Vector3(8, 3, -570),   Vector3(4, 10, 4)],
+		[Vector3(-12, -1, -580), Vector3(5, 8, 6)],
+	]
+
+	for bd in building_data:
+		_spawn_building(bd[0], bd[1])
+
+
+func _spawn_building(pos: Vector3, size: Vector3):
+	var building := StaticBody3D.new()
+	building.position = pos
+
+	var mi := MeshInstance3D.new()
+	var mesh := BoxMesh.new()
+	mesh.size = size
+	mi.mesh = mesh
+
+	# Dark metallic buildings with slight colour variation
+	var mat := StandardMaterial3D.new()
+	var shade := randf_range(0.12, 0.22)
+	mat.albedo_color = Color(shade, shade, shade * 1.3)
+	mat.metallic = 0.6
+	mat.roughness = 0.5
+	# Subtle edge glow
+	mat.emission_enabled = true
+	mat.emission = Color(0.1, 0.15, 0.3)
+	mat.emission_energy_multiplier = 0.3
+	mi.material_override = mat
+	building.add_child(mi)
+
+	var col := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = size
+	col.shape = shape
+	building.add_child(col)
+
+	hazards_container.add_child(building)
+
+
+# ── Phase Walls (must phase through) ─────────────────────────
+
+func _create_phase_walls():
+	var wall_positions = [
+		# Act 2 phase gauntlet
+		Vector3(0, 1, -148),
+		Vector3(0, 1, -158),
+		Vector3(0, 1, -168),
+		# Trench phase barriers (must phase while diving)
+		Vector3(0, -6, -345),
+		Vector3(0, -7, -390),
+		# Final approach barrier
+		Vector3(0, 0, -540),
+	]
+
+	for pos in wall_positions:
+		var wall := Area3D.new()
+		wall.add_to_group("phase_walls")
+		wall.add_to_group("hazards")
+		wall.position = pos
+
+		var mi := MeshInstance3D.new()
+		var mesh := BoxMesh.new()
+		mesh.size = Vector3(20, 14, 0.4)
+		mi.mesh = mesh
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+		var mat := StandardMaterial3D.new()
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.albedo_color = Color(0.8, 0.2, 0.3, 0.25)
+		mat.emission_enabled = true
+		mat.emission = Color(1.0, 0.2, 0.3)
+		mat.emission_energy_multiplier = 1.5
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mi.material_override = mat
+		wall.add_child(mi)
+
+		var col := CollisionShape3D.new()
+		var shape := BoxShape3D.new()
+		shape.size = Vector3(20, 14, 0.6)
+		col.shape = shape
+		wall.add_child(col)
+
+		hazards_container.add_child(wall)
+
+
+# ── Hazards (asteroids + debris) ──────────────────────────────
 
 func _create_hazards():
 	var data = [
-		# [position, size]
-		[Vector3(3, 0, -40), 2.0],
-		[Vector3(-4, 1, -45), 1.5],
-		[Vector3(0, -1, -50), 2.5],
-		[Vector3(-6, 0, -80), 4.0],
-		[Vector3(7, 2, -110), 1.5],
-		[Vector3(-7, -1, -120), 1.8],
-		[Vector3(2, 3, -180), 2.0],
-		[Vector3(-2, -2, -185), 2.2],
-		[Vector3(4, 0, -260), 1.5],
-		[Vector3(-3, 1, -265), 2.0],
+		# Act 1: Scattered debris
+		[Vector3(3, 0, -25), 2.0],
+		[Vector3(-5, 1, -30), 1.5],
+		[Vector3(6, -1, -180), 2.0],
+		[Vector3(-4, 2, -250), 1.8],
+		[Vector3(3, -1, -255), 2.2],
+		[Vector3(-2, 3, -280), 1.5],
+		# Act 3: Trench debris
+		[Vector3(2, -6, -335), 1.5],
+		[Vector3(-3, -5, -355), 2.0],
+		[Vector3(1, -7, -375), 1.8],
+		[Vector3(-2, -4, -400), 2.5],
+		# Act 4: Asteroid field
+		[Vector3(5, 1, -435), 3.0],
+		[Vector3(-6, -1, -445), 2.5],
+		[Vector3(3, 3, -455), 2.0],
+		[Vector3(-8, 0, -470), 3.5],
+		[Vector3(7, -2, -485), 2.0],
+		[Vector3(-3, 4, -500), 2.8],
+		[Vector3(0, -1, -515), 3.0],
+		[Vector3(6, 2, -525), 2.0],
+		[Vector3(-5, -2, -545), 2.5],
+		[Vector3(4, 1, -560), 1.8],
+		[Vector3(-7, 3, -575), 3.0],
+		[Vector3(2, -1, -590), 2.2],
 	]
 	for d in data:
 		var asteroid = Area3D.new()
@@ -171,13 +539,24 @@ func _create_hazards():
 # ── Enemies ───────────────────────────────────────────────────
 
 func _create_enemies():
-	# Turrets
+	# Turrets on buildings and structures
 	for pos in [
-		Vector3(8, -2, -60),
-		Vector3(-8, -2, -65),
-		Vector3(6, 3, -140),
-		Vector3(-7, 2, -210),
-		Vector3(9, -1, -215),
+		# Act 1: City turrets
+		Vector3(10, 14, -65),
+		Vector3(-10, 16, -70),
+		Vector3(12, 12, -85),
+		# Act 2: Combat zone turrets
+		Vector3(-7, 14, -210),
+		Vector3(10, 12, -210),
+		Vector3(14, 12, -235),
+		# Act 3: Trench turrets (on walls)
+		Vector3(5, 2, -340),
+		Vector3(-5, 1, -365),
+		Vector3(4, 3, -400),
+		# Act 4: Ruin turrets
+		Vector3(-14, 11, -460),
+		Vector3(12, 4, -490),
+		Vector3(-10, 10, -530),
 	]:
 		var turret = Area3D.new()
 		turret.set_script(TurretScript)
@@ -186,9 +565,19 @@ func _create_enemies():
 
 	# Fighter waves
 	var waves = [
-		[Vector3(0, 0, -95), 3],
-		[Vector3(0, 0, -165), 3],
-		[Vector3(0, 2, -245), 4],
+		# Act 1: City
+		[Vector3(0, 2, -55), 3],
+		[Vector3(0, 2, -140), 3],
+		[Vector3(0, 3, -200), 4],
+		[Vector3(0, 2, -260), 3],
+		# Act 3: Trench ambush
+		[Vector3(0, -5, -335), 2],
+		[Vector3(0, -6, -370), 3],
+		# Act 4: Asteroid field fighters
+		[Vector3(0, 2, -450), 4],
+		[Vector3(0, 0, -500), 3],
+		[Vector3(0, 1, -550), 5],  # big final wave
+		[Vector3(0, 0, -580), 3],
 	]
 	for wave in waves:
 		var center: Vector3 = wave[0]
@@ -230,12 +619,22 @@ func _create_ui():
 
 func _setup_comms_triggers():
 	comms_triggers = [
-		{"at": 0.02, "who": "Nyx",   "say": "All clear ahead... for now.",              "clr": Color(0.9, 0.5, 0.2)},
-		{"at": 0.15, "who": "Kiro",  "say": "Asteroids! Try to keep up, Raze.",         "clr": Color(0.6, 0.6, 0.7)},
-		{"at": 0.30, "who": "Bront", "say": "Fighters incoming. I've got your six.",    "clr": Color(0.6, 0.4, 0.2)},
-		{"at": 0.50, "who": "Nyx",   "say": "Heads up -- more debris. Stay sharp.",     "clr": Color(0.9, 0.5, 0.2)},
-		{"at": 0.70, "who": "Kiro",  "say": "I'd thread that gap faster. Just saying.", "clr": Color(0.6, 0.6, 0.7)},
-		{"at": 0.90, "who": "Bront", "say": "Almost through. We've got this, pack.",    "clr": Color(0.6, 0.4, 0.2)},
+		# Act 1: City
+		{"at": 0.01, "who": "Nyx",   "say": "City ahead. Stay low between the buildings.",          "clr": Color(0.9, 0.5, 0.2)},
+		{"at": 0.08, "who": "Kiro",  "say": "Fighters! Let's see who drops more.",                   "clr": Color(0.6, 0.6, 0.7)},
+		{"at": 0.15, "who": "Bront", "say": "Narrow gap ahead. Tilt to squeeze through.",           "clr": Color(0.6, 0.4, 0.2)},
+		# Act 2: Phase gauntlet
+		{"at": 0.25, "who": "Nyx",   "say": "Phase barriers! Ghost through them.",                  "clr": Color(0.9, 0.5, 0.2)},
+		{"at": 0.35, "who": "Kiro",  "say": "Heavy resistance. Lock on and let missiles fly.",      "clr": Color(0.6, 0.6, 0.7)},
+		# Act 3: Trench dive
+		{"at": 0.48, "who": "Bront", "say": "We're diving into the trench. Hold steady.",           "clr": Color(0.6, 0.4, 0.2)},
+		{"at": 0.55, "who": "Nyx",   "say": "Watch the overhangs! Phase if you need to.",           "clr": Color(0.9, 0.5, 0.2)},
+		{"at": 0.62, "who": "Kiro",  "say": "Ambush! They were waiting for us down here.",          "clr": Color(0.6, 0.6, 0.7)},
+		# Act 4: Asteroid field
+		{"at": 0.72, "who": "Bront", "say": "Open space... but it's full of debris.",               "clr": Color(0.6, 0.4, 0.2)},
+		{"at": 0.80, "who": "Nyx",   "say": "Massive wave incoming. Shoot the asteroids for drops.", "clr": Color(0.9, 0.5, 0.2)},
+		{"at": 0.88, "who": "Kiro",  "say": "This is it. Everything they've got.",                  "clr": Color(0.6, 0.6, 0.7)},
+		{"at": 0.95, "who": "Bront", "say": "Almost through. We've got this, pack.",                "clr": Color(0.6, 0.4, 0.2)},
 	]
 
 
@@ -251,3 +650,189 @@ func _check_comms_triggers():
 func _on_level_complete():
 	if squad_comms and squad_comms.has_method("show_message"):
 		squad_comms.show_message("Raze", "Area clear. Good work, pack.", Color(0.3, 0.5, 0.9))
+	_despawn_shockwave()
+
+
+# ── Shockwave Pursuit ─────────────────────────────────────────
+
+func _update_shockwave(delta):
+	var player_ratio := path_follow.progress_ratio
+
+	# Check if we're in a shockwave zone
+	var in_zone := false
+	for zone in shockwave_zones:
+		if player_ratio >= zone[0] and player_ratio <= zone[1]:
+			in_zone = true
+			if not shockwave_active:
+				# Start the shockwave behind the player
+				shockwave_progress = player_ratio - 0.03
+				_spawn_shockwave()
+			break
+
+	if not in_zone and shockwave_active:
+		_despawn_shockwave()
+		return
+
+	if not shockwave_active:
+		return
+
+	# Advance shockwave along the path
+	var curve_len := path.curve.get_baked_length()
+	shockwave_progress += (shockwave_speed / curve_len) * delta
+
+	# Position the shockwave on the path
+	var sw_dist := shockwave_progress * curve_len
+	var sw_pos: Vector3 = path.curve.sample_baked(clampf(sw_dist, 0, curve_len))
+	if shockwave:
+		shockwave.global_position = sw_pos
+		# Pulse effect
+		var pulse := 1.0 + sin(Time.get_ticks_msec() * 0.01) * 0.15
+		shockwave.scale = Vector3(pulse, pulse, pulse)
+		if shockwave_mat:
+			var urgency := clampf(1.0 - (player_ratio - shockwave_progress) * 20.0, 0.0, 1.0)
+			shockwave_mat.albedo_color.a = 0.2 + urgency * 0.4
+			shockwave_mat.emission_energy_multiplier = 2.0 + urgency * 4.0
+
+	# Check if shockwave caught the player
+	if player and is_instance_valid(player):
+		var dist_behind := (player_ratio - shockwave_progress) * curve_len
+		# Emit proximity for HUD
+		if hud and hud.has_method("update_threat"):
+			hud.update_threat(dist_behind, shockwave_active)
+		if dist_behind < shockwave_damage_dist:
+			if player.has_method("take_damage"):
+				player.take_damage(8.0 * delta)  # continuous damage when close
+
+
+func _spawn_shockwave():
+	shockwave_active = true
+
+	shockwave = MeshInstance3D.new()
+	var mesh := SphereMesh.new()
+	mesh.radius = 12.0
+	mesh.height = 24.0
+	shockwave.mesh = mesh
+	shockwave.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+	shockwave_mat = StandardMaterial3D.new()
+	shockwave_mat.albedo_color = Color(1.0, 0.3, 0.1, 0.3)
+	shockwave_mat.emission_enabled = true
+	shockwave_mat.emission = Color(1.0, 0.2, 0.05)
+	shockwave_mat.emission_energy_multiplier = 3.0
+	shockwave_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	shockwave_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	shockwave.material_override = shockwave_mat
+	add_child(shockwave)
+
+	# Warning comm
+	if squad_comms and squad_comms.has_method("show_message"):
+		squad_comms.show_message("Kiro", "Shockwave behind us! BOOST NOW!", Color(1.0, 0.3, 0.2))
+
+
+func _despawn_shockwave():
+	shockwave_active = false
+	if shockwave:
+		shockwave.queue_free()
+		shockwave = null
+		shockwave_mat = null
+	if hud and hud.has_method("update_threat"):
+		hud.update_threat(0.0, false)
+
+
+# ── Game Over ─────────────────────────────────────────────────
+
+func _on_player_destroyed():
+	player_dead = true
+	current_speed = 0.0
+
+	# Wait a moment for the explosion to play, then show menu
+	await get_tree().create_timer(1.5).timeout
+	_show_game_over()
+
+
+func _show_game_over():
+	var canvas = CanvasLayer.new()
+	canvas.layer = 10  # on top of everything
+	add_child(canvas)
+
+	game_over_ui = Control.new()
+	game_over_ui.set_anchors_preset(Control.PRESET_FULL_RECT)
+	canvas.add_child(game_over_ui)
+
+	# Dim overlay
+	var overlay := ColorRect.new()
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.color = Color(0, 0, 0, 0.6)
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	game_over_ui.add_child(overlay)
+
+	# Center container
+	var vbox := VBoxContainer.new()
+	vbox.set_anchors_preset(Control.PRESET_CENTER)
+	vbox.offset_left = -200
+	vbox.offset_top = -100
+	vbox.offset_right = 200
+	vbox.offset_bottom = 100
+	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_theme_constant_override("separation", 20)
+	game_over_ui.add_child(vbox)
+
+	# Title
+	var title := Label.new()
+	title.text = "MISSION FAILED"
+	title.add_theme_font_size_override("font_size", 48)
+	title.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+
+	# Spacer
+	var spacer := Control.new()
+	spacer.custom_minimum_size = Vector2(0, 20)
+	vbox.add_child(spacer)
+
+	# Try Again button
+	var retry_btn := Button.new()
+	retry_btn.text = "TRY AGAIN"
+	retry_btn.custom_minimum_size = Vector2(250, 50)
+	retry_btn.add_theme_font_size_override("font_size", 22)
+	retry_btn.focus_mode = Control.FOCUS_ALL
+	retry_btn.pressed.connect(_on_retry)
+	vbox.add_child(retry_btn)
+
+	# Quit button
+	var quit_btn := Button.new()
+	quit_btn.text = "QUIT"
+	quit_btn.custom_minimum_size = Vector2(250, 50)
+	quit_btn.add_theme_font_size_override("font_size", 22)
+	quit_btn.focus_mode = Control.FOCUS_ALL
+	quit_btn.pressed.connect(_on_quit)
+	vbox.add_child(quit_btn)
+
+	# Set focus neighbors for D-pad navigation
+	retry_btn.focus_neighbor_bottom = retry_btn.get_path_to(quit_btn)
+	quit_btn.focus_neighbor_top = quit_btn.get_path_to(retry_btn)
+
+	# Grab focus after a frame so the layout is finalized
+	await get_tree().process_frame
+	retry_btn.grab_focus()
+
+	# Gamepad A button may conflict with our "boost" action, so handle it manually
+	set_process_input(true)
+
+
+func _input(event: InputEvent):
+	if not player_dead or game_over_ui == null:
+		return
+	# Accept with gamepad A button or ui_accept
+	if event is InputEventJoypadButton and event.button_index == JOY_BUTTON_A and event.pressed:
+		var focused := get_viewport().gui_get_focus_owner()
+		if focused is Button:
+			focused.emit_signal("pressed")
+
+
+func _on_retry():
+	get_tree().reload_current_scene()
+
+
+func _on_quit():
+	get_tree().quit()

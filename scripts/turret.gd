@@ -4,9 +4,9 @@ extends Area3D
 const TurretBulletScript = preload("res://scripts/turret_bullet.gd")
 
 var health: float = 50.0
-var shoot_interval: float = 1.5
-var shoot_timer: float = 1.0
-var activation_dist: float = 50.0
+var shoot_interval: float = 0.7   # rapid fire
+var shoot_timer: float = 0.5
+var activation_dist: float = 60.0
 var is_active: bool = false
 var gun_pivot: Node3D
 

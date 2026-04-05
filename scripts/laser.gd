@@ -1,10 +1,13 @@
 extends Area3D
-## Player laser projectile. Travels in a straight line and damages enemies/hazards on contact.
+## Player laser projectile. Travels forward and damages enemies/hazards.
+## If a target is set (locked enemy), the laser aggressively homes toward it.
 
-var speed: float = 100.0
-var lifetime: float = 2.0
+var speed: float = 70.0
+var lifetime: float = 3.0
 var damage: float = 25.0
 var direction: Vector3 = Vector3(0, 0, -1)
+var target: Node3D = null
+var seek_strength: float = 12.0  # strong homing
 
 
 func _ready():
@@ -15,6 +18,15 @@ func _ready():
 
 
 func _process(delta):
+	# Home toward locked target if set
+	if target != null and is_instance_valid(target):
+		var to_target := (target.global_position - global_position).normalized()
+		direction = direction.lerp(to_target, seek_strength * delta).normalized()
+		# If very close, just aim directly
+		var dist_to_target := global_position.distance_to(target.global_position)
+		if dist_to_target < 5.0:
+			direction = to_target
+
 	global_position += direction * speed * delta
 	lifetime -= delta
 	if lifetime <= 0:
@@ -48,9 +60,7 @@ func _build_mesh():
 
 func _build_collision():
 	var col := CollisionShape3D.new()
-	var shape := CylinderShape3D.new()
-	shape.radius = 0.1
-	shape.height = 1.2
+	var shape := SphereShape3D.new()
+	shape.radius = 0.8  # generous sphere for reliable hits
 	col.shape = shape
-	col.rotation_degrees.x = 90
 	add_child(col)

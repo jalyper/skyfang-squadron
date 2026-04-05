@@ -2,9 +2,9 @@ extends Area3D
 ## Homing missile that tracks a locked target. Curves toward its target and
 ## explodes on contact for heavy damage.
 
-var speed: float = 40.0
-var turn_speed: float = 5.0
-var lifetime: float = 4.0
+var speed: float = 55.0
+var turn_speed: float = 8.0
+var lifetime: float = 5.0
 var damage: float = 50.0
 var target: Node3D = null
 
@@ -75,6 +75,6 @@ func _build_mesh():
 func _build_collision():
 	var col := CollisionShape3D.new()
 	var shape := SphereShape3D.new()
-	shape.radius = 0.3
+	shape.radius = 0.8
 	col.shape = shape
 	add_child(col)
