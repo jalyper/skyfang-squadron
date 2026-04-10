@@ -141,11 +141,12 @@ func _build_ships():
 
 func _build_camera():
 	var cam := Camera3D.new()
-	# Camera in front of ships, looking back at them
-	cam.position = Vector3(0, 2.0, -12)
-	cam.rotation_degrees.x = -8
+	# Camera in front of and slightly above the formation, looking back at them
+	cam.position = Vector3(0, 2.5, -10)
 	cam.fov = 50
 	add_child(cam)
+	# Look at the center of the formation
+	cam.look_at(Vector3(0, 0, 3), Vector3.UP)
 
 
 func _build_ui():
