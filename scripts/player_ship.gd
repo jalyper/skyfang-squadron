@@ -743,16 +743,16 @@ func _build_engine_lights():
 		# Visible glow sphere so the light source itself is seen
 		var glow := MeshInstance3D.new()
 		var sphere := SphereMesh.new()
-		sphere.radius = 0.08
-		sphere.height = 0.16
+		sphere.radius = 0.03
+		sphere.height = 0.06
 		glow.mesh = sphere
 		glow.position = pos
 		glow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		var glow_mat := StandardMaterial3D.new()
-		glow_mat.albedo_color = Color(0.6, 0.8, 1.0)
+		glow_mat.albedo_color = Color(0.85, 0.93, 1.0)
 		glow_mat.emission_enabled = true
-		glow_mat.emission = Color(0.5, 0.7, 1.0)
-		glow_mat.emission_energy_multiplier = 5.0
+		glow_mat.emission = Color(0.8, 0.9, 1.0)
+		glow_mat.emission_energy_multiplier = 15.0
 		glow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		glow.material_override = glow_mat
 		ship_visual.add_child(glow)
@@ -852,17 +852,17 @@ func _update_engine_lights():
 			light.light_color = Color(0.7, 0.85, 1.0)
 			light.light_energy = 6.0 * flicker
 			light.omni_range = 4.0
-			glow_mat.albedo_color = Color(0.9, 0.95, 1.0)
-			glow_mat.emission = Color(0.8, 0.9, 1.0)
-			glow_mat.emission_energy_multiplier = 12.0 * flicker
+			glow_mat.albedo_color = Color(1.0, 1.0, 1.0)
+			glow_mat.emission = Color(0.95, 0.97, 1.0)
+			glow_mat.emission_energy_multiplier = 25.0 * flicker
 			trail.emitting = true
 		else:
 			light.light_color = Color(0.4, 0.65, 1.0)
 			light.light_energy = 3.0 * flicker
 			light.omni_range = 3.0
-			glow_mat.albedo_color = Color(0.6, 0.8, 1.0)
-			glow_mat.emission = Color(0.5, 0.7, 1.0)
-			glow_mat.emission_energy_multiplier = 5.0 * flicker
+			glow_mat.albedo_color = Color(0.85, 0.93, 1.0)
+			glow_mat.emission = Color(0.8, 0.9, 1.0)
+			glow_mat.emission_energy_multiplier = 15.0 * flicker
 			trail.emitting = false
 
 
