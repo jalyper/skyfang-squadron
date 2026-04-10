@@ -766,6 +766,7 @@ func _build_engine_lights():
 		# Trail ribbon — ImmediateMesh drawn in world space
 		var trail_mi := MeshInstance3D.new()
 		trail_mi.mesh = ImmediateMesh.new()
+		trail_mi.top_level = true  # ignore parent transform — vertices are world-space
 		trail_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		var trail_mat := StandardMaterial3D.new()
 		trail_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
