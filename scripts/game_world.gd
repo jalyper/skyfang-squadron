@@ -217,29 +217,19 @@ func _create_rail_path():
 	path = Path3D.new()
 	var curve = Curve3D.new()
 
-	# Gentle S-curves going forward (-Z), ~300 units total
-	# add_point(position, in_tangent, out_tangent)
-	# in_tangent points BACKWARD (+Z), out_tangent points FORWARD (-Z)
-	# ~600 units, twice as long with varied terrain
+	# Straight rail down -Z — no lateral or vertical curves.
+	# The camera derives its orientation from the PathFollow3D, so any X/Y
+	# offsets in the path cause visible sway. Keep the rail perfectly straight
+	# and place level content around the corridor instead.
+	# ~600 units total, evenly spaced control points.
 	var pts = [
-		# Act 1: City approach (0 to -135)
-		[Vector3(0, 0, 0),       Vector3(),           Vector3(0, 0, -20)],
-		[Vector3(5, 2, -50),     Vector3(0, 0, 20),   Vector3(0, 0, -20)],
-		[Vector3(0, 1, -100),    Vector3(0, 0, 20),   Vector3(0, 0, -20)],
-		[Vector3(0, 0, -135),    Vector3(0, 0, 20),   Vector3(0, 0, -20)],
-		# Act 2: Phase gauntlet + combat (Z=-170 to -300)
-		[Vector3(5, -1, -170),   Vector3(0, 0, 20),   Vector3(0, 0, -20)],
-		[Vector3(-3, 3, -220),   Vector3(0, 0, 20),   Vector3(0, 0, -20)],
-		[Vector3(0, 0, -280),    Vector3(0, 0, 20),   Vector3(0, 0, -20)],
-		# Act 3: Dive into trench (Z=-300 to -420)
-		[Vector3(0, -5, -320),   Vector3(0, 0, 20),   Vector3(0, -3, -20)],
-		[Vector3(0, -8, -370),   Vector3(0, 0, 20),   Vector3(0, 0, -20)],
-		[Vector3(0, -5, -420),   Vector3(0, 3, 20),   Vector3(0, 0, -20)],
-		# Act 4: Open space asteroid field + final assault (Z=-420 to -600)
-		[Vector3(6, 0, -460),    Vector3(0, 0, 20),   Vector3(0, 0, -20)],
-		[Vector3(-4, 2, -510),   Vector3(0, 0, 20),   Vector3(0, 0, -20)],
-		[Vector3(3, -1, -560),   Vector3(0, 0, 20),   Vector3(0, 0, -20)],
-		[Vector3(0, 0, -600),    Vector3(0, 0, 20),   Vector3()],
+		[Vector3(0, 0, 0),       Vector3(),           Vector3(0, 0, -30)],
+		[Vector3(0, 0, -100),    Vector3(0, 0, 30),   Vector3(0, 0, -30)],
+		[Vector3(0, 0, -200),    Vector3(0, 0, 30),   Vector3(0, 0, -30)],
+		[Vector3(0, 0, -300),    Vector3(0, 0, 30),   Vector3(0, 0, -30)],
+		[Vector3(0, 0, -400),    Vector3(0, 0, 30),   Vector3(0, 0, -30)],
+		[Vector3(0, 0, -500),    Vector3(0, 0, 30),   Vector3(0, 0, -30)],
+		[Vector3(0, 0, -600),    Vector3(0, 0, 30),   Vector3()],
 	]
 	for p in pts:
 		curve.add_point(p[0], p[1], p[2])
