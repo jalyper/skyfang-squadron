@@ -88,11 +88,10 @@ var ship_visual: Node3D
 var shoot_point: Marker3D
 
 # ── Engine burn ──
-var engine_particles: GPUParticles3D
-var engine_particle_mat: ParticleProcessMaterial
-var engine_draw_mat: StandardMaterial3D
-var engine_glow: MeshInstance3D
-var engine_glow_mat: StandardMaterial3D
+var engine_bar: MeshInstance3D       # LED bar across back of ship
+var engine_bar_mat: StandardMaterial3D
+var engine_streak: MeshInstance3D    # boost streak trailing behind
+var engine_streak_mat: StandardMaterial3D
 var engine_light: OmniLight3D
 
 # ── Signals ──
@@ -715,156 +714,90 @@ func _die_explosion():
 
 
 # ── Engine Burn Effect ────────────────────────────────────────
-# GPUParticles3D exhaust: particles stream backward from the nozzle,
-# fading from hot white-blue to transparent. Nozzle glow sphere + light.
+# Normal flight: glowing LED bar across the back of the ship.
+# Boosting: bar intensifies + a long linear streak trails behind,
+# like a reverse laser bolt — conveys raw speed.
 
 func _build_engine():
-	# ── Particle emitter ──
-	engine_particles = GPUParticles3D.new()
-	engine_particles.amount = 40
-	engine_particles.lifetime = 0.4
-	engine_particles.explosiveness = 0.0
-	engine_particles.randomness = 0.2
-	engine_particles.fixed_fps = 60
-	engine_particles.local_coords = true
-	engine_particles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	engine_particles.position = Vector3(0, 0, 0.7)  # nozzle exit
+	# ── LED bar — flat wide box across the stern ──
+	engine_bar = MeshInstance3D.new()
+	var bar_mesh := BoxMesh.new()
+	bar_mesh.size = Vector3(1.2, 0.12, 0.06)  # wide, thin, shallow
+	engine_bar.mesh = bar_mesh
+	engine_bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	engine_bar.position = Vector3(0, 0, 0.65)
 
-	# Process material — controls particle physics
-	engine_particle_mat = ParticleProcessMaterial.new()
-	engine_particle_mat.direction = Vector3(0, 0, 1)  # emit backward (+Z in local)
-	engine_particle_mat.spread = 5.0
-	engine_particle_mat.initial_velocity_min = 4.0
-	engine_particle_mat.initial_velocity_max = 6.0
-	engine_particle_mat.gravity = Vector3.ZERO
-	engine_particle_mat.damping_min = 1.0
-	engine_particle_mat.damping_max = 2.0
+	engine_bar_mat = StandardMaterial3D.new()
+	engine_bar_mat.albedo_color = Color(0.5, 0.75, 1.0)
+	engine_bar_mat.emission_enabled = true
+	engine_bar_mat.emission = Color(0.4, 0.65, 1.0)
+	engine_bar_mat.emission_energy_multiplier = 4.0
+	engine_bar_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	engine_bar.material_override = engine_bar_mat
+	ship_visual.add_child(engine_bar)
 
-	# Scale: start small, shrink to nothing
-	engine_particle_mat.scale_min = 0.8
-	engine_particle_mat.scale_max = 1.2
-	var scale_curve := CurveTexture.new()
-	var sc := Curve.new()
-	sc.add_point(Vector2(0.0, 1.0))
-	sc.add_point(Vector2(0.4, 0.6))
-	sc.add_point(Vector2(1.0, 0.0))
-	scale_curve.curve = sc
-	engine_particle_mat.scale_curve = scale_curve
+	# ── Boost streak — long thin box trailing behind, hidden until boosting ──
+	engine_streak = MeshInstance3D.new()
+	var streak_mesh := BoxMesh.new()
+	streak_mesh.size = Vector3(0.3, 0.1, 3.0)  # narrow, thin, long
+	engine_streak.mesh = streak_mesh
+	engine_streak.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# Center of the streak sits behind the bar
+	engine_streak.position = Vector3(0, 0, 2.2)
+	engine_streak.visible = false
 
-	# Color: hot white-blue at start → blue → transparent
-	var color_ramp := GradientTexture1D.new()
-	var grad := Gradient.new()
-	grad.colors = PackedColorArray([
-		Color(0.85, 0.92, 1.0, 0.9),   # bright white-blue at nozzle
-		Color(0.4, 0.6, 1.0, 0.6),     # blue mid-life
-		Color(0.2, 0.4, 0.9, 0.0),     # fade to transparent
-	])
-	grad.offsets = PackedFloat32Array([0.0, 0.4, 1.0])
-	color_ramp.gradient = grad
-	engine_particle_mat.color_ramp = color_ramp
-
-	engine_particles.process_material = engine_particle_mat
-
-	# Draw pass — small billboard quad per particle
-	var draw_mesh := QuadMesh.new()
-	draw_mesh.size = Vector2(0.3, 0.3)
-	engine_particles.draw_pass_1 = draw_mesh
-
-	# Soft radial gradient texture — white center fading to transparent edges
-	var soft_dot := GradientTexture2D.new()
-	soft_dot.width = 64
-	soft_dot.height = 64
-	soft_dot.fill = GradientTexture2D.FILL_RADIAL
-	soft_dot.fill_from = Vector2(0.5, 0.5)
-	soft_dot.fill_to = Vector2(0.5, 0.0)
-	var dot_grad := Gradient.new()
-	dot_grad.colors = PackedColorArray([
-		Color(1.0, 1.0, 1.0, 1.0),
-		Color(1.0, 1.0, 1.0, 0.4),
-		Color(1.0, 1.0, 1.0, 0.0),
-	])
-	dot_grad.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
-	soft_dot.gradient = dot_grad
-
-	# Draw material — additive blending, billboard, soft texture
-	engine_draw_mat = StandardMaterial3D.new()
-	engine_draw_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	engine_draw_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	engine_draw_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	engine_draw_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	engine_draw_mat.vertex_color_use_as_albedo = true
-	engine_draw_mat.albedo_color = Color.WHITE
-	engine_draw_mat.albedo_texture = soft_dot
-	engine_draw_mat.no_depth_test = true
-	draw_mesh.material = engine_draw_mat
-
-	ship_visual.add_child(engine_particles)
-
-	# ── Nozzle glow sphere ──
-	engine_glow = MeshInstance3D.new()
-	var glow_mesh := SphereMesh.new()
-	glow_mesh.radius = 0.2
-	glow_mesh.height = 0.4
-	engine_glow.mesh = glow_mesh
-	engine_glow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	engine_glow.position = Vector3(0, 0, 0.65)
-
-	engine_glow_mat = StandardMaterial3D.new()
-	engine_glow_mat.albedo_color = Color(0.8, 0.9, 1.0, 0.9)
-	engine_glow_mat.emission_enabled = true
-	engine_glow_mat.emission = Color(0.7, 0.85, 1.0)
-	engine_glow_mat.emission_energy_multiplier = 6.0
-	engine_glow_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	engine_glow.material_override = engine_glow_mat
-	ship_visual.add_child(engine_glow)
+	engine_streak_mat = StandardMaterial3D.new()
+	engine_streak_mat.albedo_color = Color(0.6, 0.8, 1.0, 0.7)
+	engine_streak_mat.emission_enabled = true
+	engine_streak_mat.emission = Color(0.5, 0.7, 1.0)
+	engine_streak_mat.emission_energy_multiplier = 6.0
+	engine_streak_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	engine_streak_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	engine_streak_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	engine_streak.material_override = engine_streak_mat
+	ship_visual.add_child(engine_streak)
 
 	# ── Point light ──
 	engine_light = OmniLight3D.new()
-	engine_light.position = Vector3(0, 0, 1.0)
+	engine_light.position = Vector3(0, 0, 0.8)
 	engine_light.light_color = Color(0.4, 0.6, 1.0)
 	engine_light.light_energy = 1.5
-	engine_light.omni_range = 5.0
+	engine_light.omni_range = 4.0
 	ship_visual.add_child(engine_light)
 
 
 func _update_engine(_delta):
-	if engine_particles == null:
+	if engine_bar == null:
 		return
 
 	var t := Time.get_ticks_msec() / 1000.0
-	var flicker := 0.9 + sin(t * 25.0) * 0.08 + sin(t * 41.0) * 0.05
+	var flicker := 0.95 + sin(t * 30.0) * 0.05
 
 	if is_boosting:
-		# Boost: more particles, faster, bigger, brighter
-		engine_particles.amount = 80
-		engine_particles.lifetime = 0.5
-		engine_particle_mat.initial_velocity_min = 8.0
-		engine_particle_mat.initial_velocity_max = 12.0
-		engine_particle_mat.scale_min = 1.2
-		engine_particle_mat.scale_max = 1.8
-		engine_particle_mat.spread = 8.0
+		# Bar goes white-hot
+		engine_bar_mat.albedo_color = Color(0.9, 0.95, 1.0)
+		engine_bar_mat.emission = Color(0.8, 0.9, 1.0)
+		engine_bar_mat.emission_energy_multiplier = 10.0 * flicker
 
-		engine_glow.scale = Vector3(1.5, 1.5, 1.5)
-		engine_glow_mat.albedo_color = Color(1.0, 0.97, 0.95, 1.0)
-		engine_glow_mat.emission = Color(1.0, 0.95, 0.85)
-		engine_glow_mat.emission_energy_multiplier = 14.0 * flicker
+		# Streak visible — long linear blur
+		engine_streak.visible = true
+		# Pulse the streak length and brightness for a living feel
+		var streak_pulse := 0.9 + sin(t * 18.0) * 0.1
+		engine_streak.scale.z = streak_pulse
+		engine_streak_mat.albedo_color = Color(0.6, 0.8, 1.0, 0.6 * flicker)
+		engine_streak_mat.emission = Color(0.5, 0.75, 1.0)
+		engine_streak_mat.emission_energy_multiplier = 8.0 * flicker
 
-		engine_light.light_energy = 5.0 * flicker
-		engine_light.light_color = Color(0.5, 0.7, 1.0)
+		engine_light.light_energy = 4.0 * flicker
+		engine_light.light_color = Color(0.6, 0.8, 1.0)
 	else:
-		# Normal cruise
-		engine_particles.amount = 40
-		engine_particles.lifetime = 0.4
-		engine_particle_mat.initial_velocity_min = 4.0
-		engine_particle_mat.initial_velocity_max = 6.0
-		engine_particle_mat.scale_min = 0.8
-		engine_particle_mat.scale_max = 1.2
-		engine_particle_mat.spread = 5.0
+		# Steady LED bar glow
+		engine_bar_mat.albedo_color = Color(0.5, 0.75, 1.0)
+		engine_bar_mat.emission = Color(0.4, 0.65, 1.0)
+		engine_bar_mat.emission_energy_multiplier = 4.0 * flicker
 
-		engine_glow.scale = Vector3(1.0, 1.0, 1.0)
-		engine_glow_mat.albedo_color = Color(0.8, 0.9, 1.0, 0.9)
-		engine_glow_mat.emission = Color(0.7, 0.85, 1.0)
-		engine_glow_mat.emission_energy_multiplier = 6.0 * flicker
+		# No streak
+		engine_streak.visible = false
 
 		engine_light.light_energy = 1.5 * flicker
 		engine_light.light_color = Color(0.4, 0.6, 1.0)
