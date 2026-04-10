@@ -125,6 +125,7 @@ func _process(delta):
 	_handle_lock_on(delta)
 	_handle_missile_fire()
 	_handle_flash(delta)
+	_update_engine_lights()
 	if fire_timer > 0:
 		fire_timer -= delta
 	if invuln_timer > 0:
@@ -718,6 +719,7 @@ func _build_visuals():
 		model.scale = Vector3(1.0, 1.0, 1.0)
 		model.rotation_degrees.y = -90
 		ship_visual.add_child(model)
+		_build_engine_lights()
 	else:
 		var mi := MeshInstance3D.new()
 		var mesh := PrismMesh.new()
@@ -728,6 +730,38 @@ func _build_visuals():
 		mat.albedo_color = Color(0.3, 0.5, 0.9)
 		mi.material_override = mat
 		ship_visual.add_child(mi)
+
+
+func _build_engine_lights():
+	# Two engine glows at the rear wing-body junctions
+	# Positions estimated from the model's visual shape
+	var positions := [
+		Vector3(-0.4, 0.0, 0.5),   # left engine
+		Vector3(0.4, 0.0, 0.5),    # right engine
+	]
+	for pos in positions:
+		var light := OmniLight3D.new()
+		light.position = pos
+		light.light_color = Color(0.4, 0.65, 1.0)
+		light.light_energy = 2.0
+		light.omni_range = 2.5
+		light.omni_attenuation = 1.5
+		ship_visual.add_child(light)
+		engine_lights.append(light)
+
+
+func _update_engine_lights():
+	var t := Time.get_ticks_msec() / 1000.0
+	var flicker := 0.95 + sin(t * 30.0) * 0.05
+	for light in engine_lights:
+		if is_boosting:
+			light.light_color = Color(0.6, 0.8, 1.0)
+			light.light_energy = 5.0 * flicker
+			light.omni_range = 4.0
+		else:
+			light.light_color = Color(0.4, 0.65, 1.0)
+			light.light_energy = 2.0 * flicker
+			light.omni_range = 2.5
 
 
 func _build_collision():
