@@ -90,7 +90,7 @@ var shoot_point: Marker3D
 # ── Engine burn ──
 var engine_bar: MeshInstance3D       # LED bar across back of ship
 var engine_bar_mat: StandardMaterial3D
-var engine_streak: MeshInstance3D    # boost streak trailing behind
+var engine_streak: Node3D             # boost streak container
 var engine_streak_mat: StandardMaterial3D
 var engine_light: OmniLight3D
 
@@ -736,26 +736,52 @@ func _build_engine():
 	engine_bar.material_override = engine_bar_mat
 	ship_visual.add_child(engine_bar)
 
-	# ── Boost streak — long thin box trailing behind, hidden until boosting ──
-	engine_streak = MeshInstance3D.new()
-	var streak_mesh := BoxMesh.new()
-	streak_mesh.size = Vector3(0.3, 0.1, 3.0)  # narrow, thin, long
-	engine_streak.mesh = streak_mesh
-	engine_streak.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	# Center of the streak sits behind the bar
-	engine_streak.position = Vector3(0, 0, 2.2)
-	engine_streak.visible = false
+	# ── Boost streak — two razor-thin lines trailing behind ──
+	# Outer: faint wide glow
+	var streak_outer := MeshInstance3D.new()
+	var outer_mesh := BoxMesh.new()
+	outer_mesh.size = Vector3(0.08, 0.02, 4.0)
+	streak_outer.mesh = outer_mesh
+	streak_outer.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	streak_outer.position = Vector3(0, 0, 2.7)
 
-	engine_streak_mat = StandardMaterial3D.new()
-	engine_streak_mat.albedo_color = Color(0.6, 0.8, 1.0, 0.7)
-	engine_streak_mat.emission_enabled = true
-	engine_streak_mat.emission = Color(0.5, 0.7, 1.0)
-	engine_streak_mat.emission_energy_multiplier = 6.0
-	engine_streak_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	engine_streak_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	engine_streak_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	engine_streak.material_override = engine_streak_mat
+	var outer_mat := StandardMaterial3D.new()
+	outer_mat.albedo_color = Color(0.4, 0.6, 1.0, 0.2)
+	outer_mat.emission_enabled = true
+	outer_mat.emission = Color(0.3, 0.5, 1.0)
+	outer_mat.emission_energy_multiplier = 4.0
+	outer_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	outer_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	outer_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	streak_outer.material_override = outer_mat
+
+	# Inner: bright hot core
+	var streak_inner := MeshInstance3D.new()
+	var inner_mesh := BoxMesh.new()
+	inner_mesh.size = Vector3(0.02, 0.02, 4.5)
+	streak_inner.mesh = inner_mesh
+	streak_inner.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	streak_inner.position = Vector3(0, 0, 2.9)
+
+	var inner_mat := StandardMaterial3D.new()
+	inner_mat.albedo_color = Color(0.7, 0.85, 1.0, 0.35)
+	inner_mat.emission_enabled = true
+	inner_mat.emission = Color(0.6, 0.8, 1.0)
+	inner_mat.emission_energy_multiplier = 8.0
+	inner_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	inner_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	inner_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	streak_inner.material_override = inner_mat
+
+	# Group both into a container for easy show/hide
+	engine_streak = Node3D.new()
+	engine_streak.add_child(streak_outer)
+	engine_streak.add_child(streak_inner)
+	engine_streak.visible = false
 	ship_visual.add_child(engine_streak)
+
+	# Store materials for runtime updates
+	engine_streak_mat = inner_mat  # we'll pulse the inner core
 
 	# ── Point light ──
 	engine_light = OmniLight3D.new()
@@ -779,13 +805,10 @@ func _update_engine(_delta):
 		engine_bar_mat.emission = Color(0.8, 0.9, 1.0)
 		engine_bar_mat.emission_energy_multiplier = 10.0 * flicker
 
-		# Streak visible — long linear blur
+		# Streak visible — razor-thin trailing lines
 		engine_streak.visible = true
-		# Pulse the streak length and brightness for a living feel
-		var streak_pulse := 0.9 + sin(t * 18.0) * 0.1
-		engine_streak.scale.z = streak_pulse
-		engine_streak_mat.albedo_color = Color(0.6, 0.8, 1.0, 0.6 * flicker)
-		engine_streak_mat.emission = Color(0.5, 0.75, 1.0)
+		# Subtle brightness pulse on the inner core
+		engine_streak_mat.albedo_color = Color(0.7, 0.85, 1.0, 0.3 * flicker)
 		engine_streak_mat.emission_energy_multiplier = 8.0 * flicker
 
 		engine_light.light_energy = 4.0 * flicker
