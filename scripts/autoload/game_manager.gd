@@ -52,7 +52,7 @@ func _setup_input_actions():
 	_add_joy_axis("move_left", JOY_AXIS_LEFT_X, -1.0)
 	_add_joy_axis("move_right", JOY_AXIS_LEFT_X, 1.0)
 
-	# ── Aim reticle (right stick / arrow keys) ──
+	# ── Right stick / arrow keys (used for solar map navigation) ──
 	_add_key_action("aim_up", KEY_UP)
 	_add_key_action("aim_down", KEY_DOWN)
 	_add_key_action("aim_left", KEY_LEFT)

@@ -4,7 +4,6 @@ extends Area3D
 ##
 ## Controls (Xbox):
 ##   Left stick  – move ship
-##   Right stick – aim reticle (for lock-on)
 ##   R2          – fire normal shots
 ##   X           – fire tracking missiles at locked targets
 ##   A           – boost
@@ -58,11 +57,6 @@ var phase_timer: float = 0.0
 var phase_duration: float = 1.0
 var phase_cooldown: float = 3.0
 var phase_cd_timer: float = 0.0
-
-# ── Reticle (right stick) ──
-var reticle_offset: Vector2 = Vector2.ZERO
-var reticle_speed: float = 600.0
-var reticle_bounds: Vector2 = Vector2(900.0, 500.0)
 
 # ── Lock-on ──
 var max_locks: int = 1
@@ -120,7 +114,6 @@ func _process(delta):
 	if is_dead:
 		return
 	_handle_movement(delta)
-	_handle_aim(delta)
 	_handle_snap_target()
 	_handle_shooting(delta)
 	_handle_boost_brake(delta)
@@ -159,37 +152,11 @@ func _handle_movement(delta):
 	var strafe_bank := -input.x * deg_to_rad(bank_angle)
 	var pitch_adj := input.y * deg_to_rad(10.0)
 
-	# Ship nose follows reticle (right stick aim)
-	var aim_yaw := -reticle_offset.x / reticle_bounds.x * deg_to_rad(20.0)
-	var aim_pitch := reticle_offset.y / reticle_bounds.y * deg_to_rad(12.0)
-
-	# Combine tilt + strafe banking + aim
+	# Combine tilt + strafe banking
 	var target_z := tilt_current + strafe_bank
 	ship_visual.rotation.z = lerpf(ship_visual.rotation.z, target_z, bank_lerp * delta)
-	ship_visual.rotation.x = lerpf(ship_visual.rotation.x, pitch_adj + aim_pitch, bank_lerp * delta)
-	ship_visual.rotation.y = lerpf(ship_visual.rotation.y, aim_yaw, bank_lerp * delta)
-
-
-# ── Aim (right stick) ────────────────────────────────────────
-
-func _handle_aim(delta):
-	var aim := Input.get_vector("aim_left", "aim_right", "aim_up", "aim_down")
-	# Apply deadzone
-	if aim.length() < 0.2:
-		aim = Vector2.ZERO
-	# Acceleration curve: small input = fine aim, full input = fast sweep
-	# Squaring the magnitude keeps the direction but scales speed exponentially
-	var magnitude := aim.length()
-	var scaled_speed := reticle_speed * magnitude  # quadratic feel (already multiplied by aim below)
-	reticle_offset.x += aim.x * scaled_speed * delta
-	reticle_offset.y += aim.y * scaled_speed * delta
-	reticle_offset.x = clampf(reticle_offset.x, -reticle_bounds.x, reticle_bounds.x)
-	reticle_offset.y = clampf(reticle_offset.y, -reticle_bounds.y, reticle_bounds.y)
-	# Only drift to centre when no target is locked/being tracked
-	var has_target := locked_targets.size() > 0 or lock_candidate != null
-	if not has_target:
-		var return_speed := 6.0 if aim == Vector2.ZERO else 0.8
-		reticle_offset = reticle_offset.lerp(Vector2.ZERO, return_speed * delta)
+	ship_visual.rotation.x = lerpf(ship_visual.rotation.x, pitch_adj, bank_lerp * delta)
+	ship_visual.rotation.y = lerpf(ship_visual.rotation.y, 0.0, bank_lerp * delta)
 
 
 # ── Snap to nearest enemy (Y) ─────────────────────────────────
@@ -231,10 +198,6 @@ func _handle_snap_target():
 	locked_targets.append(chosen)
 	lock_candidate = null
 	lock_timer = 0.0
-
-	# Snap reticle to target
-	var target_screen := cam.unproject_position(chosen.global_position)
-	reticle_offset = target_screen - screen_center
 
 
 # ── Shooting (R2) ────────────────────────────────────────────
@@ -501,7 +464,7 @@ func _clear_material_overrides(node: Node):
 		_clear_material_overrides(child)
 
 
-# ── Lock-on (reticle hover for 1 sec → snap) ─────────────────
+# ── Lock-on (enemies near screen center auto-lock) ───────────
 
 func _handle_lock_on(delta):
 	# Clean up invalid candidate
@@ -514,11 +477,10 @@ func _handle_lock_on(delta):
 		return
 
 	var screen_center := get_viewport().get_visible_rect().size / 2.0
-	var reticle_screen := screen_center + reticle_offset
 
-	# Find enemy closest to reticle
+	# Find enemy closest to screen center
 	var best_enemy: Node3D = null
-	var best_screen_dist := 80.0  # pixel radius — generous for controller aim
+	var best_screen_dist := 120.0  # pixel radius from center
 
 	for enemy in get_tree().get_nodes_in_group("enemies"):
 		if not is_instance_valid(enemy) or enemy in locked_targets:
@@ -530,7 +492,7 @@ func _handle_lock_on(delta):
 		if world_dist > lock_range:
 			continue
 		var spos := cam.unproject_position(enemy.global_position)
-		var d := spos.distance_to(reticle_screen)
+		var d := spos.distance_to(screen_center)
 		if d < best_screen_dist:
 			best_screen_dist = d
 			best_enemy = enemy
@@ -541,9 +503,6 @@ func _handle_lock_on(delta):
 			locked_targets.append(best_enemy)
 			lock_timer = 0.0
 			lock_candidate = null
-			# Snap reticle toward the locked target
-			var target_screen := cam.unproject_position(best_enemy.global_position)
-			reticle_offset = reticle_offset.lerp(target_screen - screen_center, 0.4)
 	elif best_enemy != null:
 		lock_candidate = best_enemy
 		lock_timer = 0.0

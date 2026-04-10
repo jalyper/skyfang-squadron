@@ -1,6 +1,6 @@
 extends Control
-## In-flight HUD: right-stick crosshair, target brackets, lock-on progress,
-## shield/boost bars, missile counter, hit counter, lives, phase indicator,
+## In-flight HUD: fixed center crosshair, target brackets, lock-on progress,
+## shield/boost/laser bars, missile counter, hit counter, lives, phase indicator,
 ## boost speed lines.
 
 var health_bar: ProgressBar
@@ -78,7 +78,7 @@ func _connect_player():
 		lives_label.text = "x %d" % p.lives
 
 
-# ── Crosshair (follows right-stick reticle) ───────────────────
+# ── Crosshair (fixed at screen center) ────────────────────────
 
 func _build_crosshair():
 	crosshair = Control.new()
@@ -87,7 +87,9 @@ func _build_crosshair():
 	crosshair.size = Vector2(60, 60)
 	crosshair.draw.connect(_draw_crosshair)
 	add_child(crosshair)
-	# Position set every frame in _update_crosshair
+	# Position once at center
+	var screen_center := get_viewport().get_visible_rect().size / 2.0
+	crosshair.position = screen_center - Vector2(30, 30)
 
 
 func _draw_crosshair():
@@ -103,11 +105,7 @@ func _draw_crosshair():
 
 
 func _update_crosshair():
-	var p = GameManager.player
-	if p == null or crosshair == null:
-		return
-	var screen_center := get_viewport().get_visible_rect().size / 2.0
-	crosshair.position = screen_center + p.reticle_offset - Vector2(30, 30)
+	pass  # crosshair is fixed at center, nothing to update
 
 
 # ── Target Overlay (brackets + lock-on progress) ─────────────
