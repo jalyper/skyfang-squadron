@@ -88,7 +88,7 @@ var ship_visual: Node3D
 var shoot_point: Marker3D
 
 # ── Engine lights ──
-var engine_lights: Array = []  # OmniLight3D instances at engine positions
+var engine_lights: Array = []  # [{light, glow, glow_mat, trail}] per engine
 
 # ── Signals ──
 signal health_changed(hp: float, hp_max: float)
@@ -736,8 +736,8 @@ func _build_engine_lights():
 	# Two engine glows at the rear wing-body junctions
 	# Positions estimated from the model's visual shape
 	var positions := [
-		Vector3(-0.6, 0.0, 1.0),   # left engine — behind the hull
-		Vector3(0.6, 0.0, 1.0),    # right engine — behind the hull
+		Vector3(-0.6, 0.0, 0.7),   # left engine
+		Vector3(0.6, 0.0, 0.7),    # right engine
 	]
 	for pos in positions:
 		# Visible glow sphere so the light source itself is seen
@@ -764,7 +764,81 @@ func _build_engine_lights():
 		light.omni_range = 3.0
 		light.omni_attenuation = 1.5
 		ship_visual.add_child(light)
-		engine_lights.append({"light": light, "glow": glow, "glow_mat": glow_mat})
+
+		# Short particle trail — soft dots streaming backward
+		var trail := GPUParticles3D.new()
+		trail.emitting = false
+		trail.amount = 20
+		trail.lifetime = 0.3
+		trail.explosiveness = 0.0
+		trail.randomness = 0.1
+		trail.fixed_fps = 60
+		trail.local_coords = false
+		trail.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		trail.position = pos
+
+		var proc := ParticleProcessMaterial.new()
+		proc.direction = Vector3(0, 0, 1)
+		proc.spread = 4.0
+		proc.initial_velocity_min = 4.0
+		proc.initial_velocity_max = 6.0
+		proc.gravity = Vector3.ZERO
+		proc.damping_min = 2.0
+		proc.damping_max = 3.0
+		proc.scale_min = 0.5
+		proc.scale_max = 0.8
+
+		var sc_curve := CurveTexture.new()
+		var sc := Curve.new()
+		sc.add_point(Vector2(0.0, 1.0))
+		sc.add_point(Vector2(0.5, 0.5))
+		sc.add_point(Vector2(1.0, 0.0))
+		sc_curve.curve = sc
+		proc.scale_curve = sc_curve
+
+		var ramp := GradientTexture1D.new()
+		var grad := Gradient.new()
+		grad.colors = PackedColorArray([
+			Color(0.8, 0.9, 1.0, 0.5),
+			Color(0.4, 0.6, 1.0, 0.2),
+			Color(0.2, 0.4, 0.9, 0.0),
+		])
+		grad.offsets = PackedFloat32Array([0.0, 0.4, 1.0])
+		ramp.gradient = grad
+		proc.color_ramp = ramp
+
+		trail.process_material = proc
+
+		var quad := QuadMesh.new()
+		quad.size = Vector2(0.15, 0.15)
+		trail.draw_pass_1 = quad
+
+		var dot_tex := GradientTexture2D.new()
+		dot_tex.width = 32
+		dot_tex.height = 32
+		dot_tex.fill = GradientTexture2D.FILL_RADIAL
+		dot_tex.fill_from = Vector2(0.5, 0.5)
+		dot_tex.fill_to = Vector2(0.5, 0.0)
+		var dg := Gradient.new()
+		dg.colors = PackedColorArray([
+			Color(1, 1, 1, 1), Color(1, 1, 1, 0.3), Color(1, 1, 1, 0),
+		])
+		dg.offsets = PackedFloat32Array([0.0, 0.4, 1.0])
+		dot_tex.gradient = dg
+
+		var dmat := StandardMaterial3D.new()
+		dmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		dmat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		dmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		dmat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		dmat.vertex_color_use_as_albedo = true
+		dmat.albedo_color = Color.WHITE
+		dmat.albedo_texture = dot_tex
+		dmat.no_depth_test = true
+		quad.material = dmat
+
+		ship_visual.add_child(trail)
+		engine_lights.append({"light": light, "glow": glow, "glow_mat": glow_mat, "trail": trail})
 
 
 func _update_engine_lights():
@@ -773,6 +847,7 @@ func _update_engine_lights():
 	for entry in engine_lights:
 		var light: OmniLight3D = entry["light"]
 		var glow_mat: StandardMaterial3D = entry["glow_mat"]
+		var trail: GPUParticles3D = entry["trail"]
 		if is_boosting:
 			light.light_color = Color(0.7, 0.85, 1.0)
 			light.light_energy = 6.0 * flicker
@@ -780,6 +855,7 @@ func _update_engine_lights():
 			glow_mat.albedo_color = Color(0.9, 0.95, 1.0)
 			glow_mat.emission = Color(0.8, 0.9, 1.0)
 			glow_mat.emission_energy_multiplier = 12.0 * flicker
+			trail.emitting = true
 		else:
 			light.light_color = Color(0.4, 0.65, 1.0)
 			light.light_energy = 3.0 * flicker
@@ -787,6 +863,7 @@ func _update_engine_lights():
 			glow_mat.albedo_color = Color(0.6, 0.8, 1.0)
 			glow_mat.emission = Color(0.5, 0.7, 1.0)
 			glow_mat.emission_energy_multiplier = 5.0 * flicker
+			trail.emitting = false
 
 
 func _build_collision():
