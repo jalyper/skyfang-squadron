@@ -736,32 +736,57 @@ func _build_engine_lights():
 	# Two engine glows at the rear wing-body junctions
 	# Positions estimated from the model's visual shape
 	var positions := [
-		Vector3(-0.4, 0.0, 0.5),   # left engine
-		Vector3(0.4, 0.0, 0.5),    # right engine
+		Vector3(-0.6, 0.0, 1.0),   # left engine — behind the hull
+		Vector3(0.6, 0.0, 1.0),    # right engine — behind the hull
 	]
 	for pos in positions:
+		# Visible glow sphere so the light source itself is seen
+		var glow := MeshInstance3D.new()
+		var sphere := SphereMesh.new()
+		sphere.radius = 0.08
+		sphere.height = 0.16
+		glow.mesh = sphere
+		glow.position = pos
+		glow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var glow_mat := StandardMaterial3D.new()
+		glow_mat.albedo_color = Color(0.6, 0.8, 1.0)
+		glow_mat.emission_enabled = true
+		glow_mat.emission = Color(0.5, 0.7, 1.0)
+		glow_mat.emission_energy_multiplier = 5.0
+		glow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		glow.material_override = glow_mat
+		ship_visual.add_child(glow)
+
 		var light := OmniLight3D.new()
 		light.position = pos
 		light.light_color = Color(0.4, 0.65, 1.0)
-		light.light_energy = 2.0
-		light.omni_range = 2.5
+		light.light_energy = 3.0
+		light.omni_range = 3.0
 		light.omni_attenuation = 1.5
 		ship_visual.add_child(light)
-		engine_lights.append(light)
+		engine_lights.append({"light": light, "glow": glow, "glow_mat": glow_mat})
 
 
 func _update_engine_lights():
 	var t := Time.get_ticks_msec() / 1000.0
 	var flicker := 0.95 + sin(t * 30.0) * 0.05
-	for light in engine_lights:
+	for entry in engine_lights:
+		var light: OmniLight3D = entry["light"]
+		var glow_mat: StandardMaterial3D = entry["glow_mat"]
 		if is_boosting:
-			light.light_color = Color(0.6, 0.8, 1.0)
-			light.light_energy = 5.0 * flicker
+			light.light_color = Color(0.7, 0.85, 1.0)
+			light.light_energy = 6.0 * flicker
 			light.omni_range = 4.0
+			glow_mat.albedo_color = Color(0.9, 0.95, 1.0)
+			glow_mat.emission = Color(0.8, 0.9, 1.0)
+			glow_mat.emission_energy_multiplier = 12.0 * flicker
 		else:
 			light.light_color = Color(0.4, 0.65, 1.0)
-			light.light_energy = 2.0 * flicker
-			light.omni_range = 2.5
+			light.light_energy = 3.0 * flicker
+			light.omni_range = 3.0
+			glow_mat.albedo_color = Color(0.6, 0.8, 1.0)
+			glow_mat.emission = Color(0.5, 0.7, 1.0)
+			glow_mat.emission_energy_multiplier = 5.0 * flicker
 
 
 func _build_collision():
