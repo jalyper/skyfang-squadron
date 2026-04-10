@@ -736,16 +736,15 @@ func _build_engine_lights():
 	# Two engine glows at the rear wing-body junctions
 	# Positions estimated from the model's visual shape
 	var positions := [
-		Vector3(-0.6, 0.0, 0.7),   # left engine
-		Vector3(0.6, 0.0, 0.7),    # right engine
+		Vector3(-0.55, 0.0, 0.45),  # left engine — snug against hull
+		Vector3(0.55, 0.0, 0.45),   # right engine
 	]
 	for pos in positions:
-		# Visible glow sphere so the light source itself is seen
+		# Engine nozzle — tiny bright point light
 		var glow := MeshInstance3D.new()
-		var sphere := SphereMesh.new()
-		sphere.radius = 0.03
-		sphere.height = 0.06
-		glow.mesh = sphere
+		var glow_mesh := BoxMesh.new()
+		glow_mesh.size = Vector3(0.06, 0.04, 0.02)  # thin slit, not a sphere
+		glow.mesh = glow_mesh
 		glow.position = pos
 		glow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		var glow_mat := StandardMaterial3D.new()
@@ -765,13 +764,13 @@ func _build_engine_lights():
 		light.omni_attenuation = 1.5
 		ship_visual.add_child(light)
 
-		# Short particle trail — soft dots streaming backward
+		# Plasma trail — tight beam of bright color, no texture dependency
 		var trail := GPUParticles3D.new()
 		trail.emitting = false
-		trail.amount = 20
-		trail.lifetime = 0.3
+		trail.amount = 25
+		trail.lifetime = 0.25
 		trail.explosiveness = 0.0
-		trail.randomness = 0.1
+		trail.randomness = 0.05
 		trail.fixed_fps = 60
 		trail.local_coords = false
 		trail.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -779,61 +778,51 @@ func _build_engine_lights():
 
 		var proc := ParticleProcessMaterial.new()
 		proc.direction = Vector3(0, 0, 1)
-		proc.spread = 4.0
-		proc.initial_velocity_min = 4.0
-		proc.initial_velocity_max = 6.0
+		proc.spread = 1.5  # very tight — plasma beam, not smoke
+		proc.initial_velocity_min = 6.0
+		proc.initial_velocity_max = 8.0
 		proc.gravity = Vector3.ZERO
-		proc.damping_min = 2.0
-		proc.damping_max = 3.0
-		proc.scale_min = 0.5
-		proc.scale_max = 0.8
+		proc.damping_min = 3.0
+		proc.damping_max = 4.0
+		proc.scale_min = 0.4
+		proc.scale_max = 0.6
 
+		# Shrink over life
 		var sc_curve := CurveTexture.new()
 		var sc := Curve.new()
 		sc.add_point(Vector2(0.0, 1.0))
-		sc.add_point(Vector2(0.5, 0.5))
-		sc.add_point(Vector2(1.0, 0.0))
+		sc.add_point(Vector2(0.5, 0.6))
+		sc.add_point(Vector2(1.0, 0.1))
 		sc_curve.curve = sc
 		proc.scale_curve = sc_curve
 
+		# Color: white-hot core → bright blue → fade
 		var ramp := GradientTexture1D.new()
 		var grad := Gradient.new()
 		grad.colors = PackedColorArray([
-			Color(0.8, 0.9, 1.0, 0.5),
-			Color(0.4, 0.6, 1.0, 0.2),
-			Color(0.2, 0.4, 0.9, 0.0),
+			Color(0.9, 0.95, 1.0, 0.8),
+			Color(0.3, 0.5, 1.0, 0.5),
+			Color(0.1, 0.3, 0.8, 0.0),
 		])
-		grad.offsets = PackedFloat32Array([0.0, 0.4, 1.0])
+		grad.offsets = PackedFloat32Array([0.0, 0.3, 1.0])
 		ramp.gradient = grad
 		proc.color_ramp = ramp
 
 		trail.process_material = proc
 
+		# Thin horizontal slit quad — reads as a beam slice, not a dot
 		var quad := QuadMesh.new()
-		quad.size = Vector2(0.15, 0.15)
+		quad.size = Vector2(0.1, 0.03)
 		trail.draw_pass_1 = quad
 
-		var dot_tex := GradientTexture2D.new()
-		dot_tex.width = 32
-		dot_tex.height = 32
-		dot_tex.fill = GradientTexture2D.FILL_RADIAL
-		dot_tex.fill_from = Vector2(0.5, 0.5)
-		dot_tex.fill_to = Vector2(0.5, 0.0)
-		var dg := Gradient.new()
-		dg.colors = PackedColorArray([
-			Color(1, 1, 1, 1), Color(1, 1, 1, 0.3), Color(1, 1, 1, 0),
-		])
-		dg.offsets = PackedFloat32Array([0.0, 0.4, 1.0])
-		dot_tex.gradient = dg
-
+		# Bright unshaded material — color baked in, no texture needed
 		var dmat := StandardMaterial3D.new()
 		dmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		dmat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 		dmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		dmat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 		dmat.vertex_color_use_as_albedo = true
-		dmat.albedo_color = Color.WHITE
-		dmat.albedo_texture = dot_tex
+		dmat.albedo_color = Color(0.5, 0.7, 1.0)
 		dmat.no_depth_test = true
 		quad.material = dmat
 
