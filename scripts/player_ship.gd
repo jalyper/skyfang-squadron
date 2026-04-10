@@ -88,10 +88,10 @@ var ship_visual: Node3D
 var shoot_point: Marker3D
 
 # ── Engine burn ──
-var engine_bar: MeshInstance3D       # LED bar across back of ship
+var engine_bar: MeshInstance3D         # LED bar across stern
 var engine_bar_mat: StandardMaterial3D
-var engine_streak: Node3D             # boost streak container
-var engine_streak_mat: StandardMaterial3D
+var engine_trail: GPUParticles3D       # jet trail (boost only)
+var engine_trail_process: ParticleProcessMaterial
 var engine_light: OmniLight3D
 
 # ── Signals ──
@@ -714,15 +714,15 @@ func _die_explosion():
 
 
 # ── Engine Burn Effect ────────────────────────────────────────
-# Normal flight: glowing LED bar across the back of the ship.
-# Boosting: bar intensifies + a long linear streak trails behind,
-# like a reverse laser bolt — conveys raw speed.
+# Normal flight: glowing LED bar across the stern.
+# Boosting: bar intensifies + particle jet trail streams behind — velocity-
+# stretched billboards forming a smooth, linear exhaust plume.
 
 func _build_engine():
 	# ── LED bar — flat wide box across the stern ──
 	engine_bar = MeshInstance3D.new()
 	var bar_mesh := BoxMesh.new()
-	bar_mesh.size = Vector3(1.2, 0.12, 0.06)  # wide, thin, shallow
+	bar_mesh.size = Vector3(1.2, 0.12, 0.06)
 	engine_bar.mesh = bar_mesh
 	engine_bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	engine_bar.position = Vector3(0, 0, 0.65)
@@ -736,52 +736,88 @@ func _build_engine():
 	engine_bar.material_override = engine_bar_mat
 	ship_visual.add_child(engine_bar)
 
-	# ── Boost streak — two razor-thin lines trailing behind ──
-	# Outer: faint wide glow
-	var streak_outer := MeshInstance3D.new()
-	var outer_mesh := BoxMesh.new()
-	outer_mesh.size = Vector3(0.08, 0.02, 4.0)
-	streak_outer.mesh = outer_mesh
-	streak_outer.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	streak_outer.position = Vector3(0, 0, 2.7)
+	# ── Jet trail particles — velocity-stretched for linear streaks ──
+	engine_trail = GPUParticles3D.new()
+	engine_trail.emitting = false
+	engine_trail.amount = 30
+	engine_trail.lifetime = 0.6
+	engine_trail.explosiveness = 0.0
+	engine_trail.randomness = 0.05
+	engine_trail.fixed_fps = 60
+	# Use global coords so the trail stays in world space as the ship moves
+	engine_trail.local_coords = false
+	engine_trail.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	engine_trail.position = Vector3(0, 0, 0.7)
 
-	var outer_mat := StandardMaterial3D.new()
-	outer_mat.albedo_color = Color(0.4, 0.6, 1.0, 0.2)
-	outer_mat.emission_enabled = true
-	outer_mat.emission = Color(0.3, 0.5, 1.0)
-	outer_mat.emission_energy_multiplier = 4.0
-	outer_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	outer_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	outer_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	streak_outer.material_override = outer_mat
+	engine_trail_process = ParticleProcessMaterial.new()
+	engine_trail_process.direction = Vector3(0, 0, 1)
+	engine_trail_process.spread = 1.5  # very tight — nearly a line
+	engine_trail_process.initial_velocity_min = 6.0
+	engine_trail_process.initial_velocity_max = 8.0
+	engine_trail_process.gravity = Vector3.ZERO
+	engine_trail_process.damping_min = 2.0
+	engine_trail_process.damping_max = 3.0
+	# Align particles along their velocity for stretched streaks
+	engine_trail_process.particle_flag_align_y = true
 
-	# Inner: bright hot core
-	var streak_inner := MeshInstance3D.new()
-	var inner_mesh := BoxMesh.new()
-	inner_mesh.size = Vector3(0.02, 0.02, 4.5)
-	streak_inner.mesh = inner_mesh
-	streak_inner.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	streak_inner.position = Vector3(0, 0, 2.9)
+	# Scale: thin on X (width), long on Y (along velocity)
+	engine_trail_process.scale_min = 0.8
+	engine_trail_process.scale_max = 1.0
+	var scale_curve := CurveTexture.new()
+	var sc := Curve.new()
+	sc.add_point(Vector2(0.0, 1.0))
+	sc.add_point(Vector2(0.5, 0.7))
+	sc.add_point(Vector2(1.0, 0.0))
+	scale_curve.curve = sc
+	engine_trail_process.scale_curve = scale_curve
 
-	var inner_mat := StandardMaterial3D.new()
-	inner_mat.albedo_color = Color(0.7, 0.85, 1.0, 0.35)
-	inner_mat.emission_enabled = true
-	inner_mat.emission = Color(0.6, 0.8, 1.0)
-	inner_mat.emission_energy_multiplier = 8.0
-	inner_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	inner_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	inner_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	streak_inner.material_override = inner_mat
+	# Color ramp: bright white-blue → blue → fade out
+	var color_ramp := GradientTexture1D.new()
+	var grad := Gradient.new()
+	grad.colors = PackedColorArray([
+		Color(0.8, 0.9, 1.0, 0.5),
+		Color(0.4, 0.6, 1.0, 0.3),
+		Color(0.2, 0.4, 0.9, 0.0),
+	])
+	grad.offsets = PackedFloat32Array([0.0, 0.4, 1.0])
+	color_ramp.gradient = grad
+	engine_trail_process.color_ramp = color_ramp
 
-	# Group both into a container for easy show/hide
-	engine_streak = Node3D.new()
-	engine_streak.add_child(streak_outer)
-	engine_streak.add_child(streak_inner)
-	engine_streak.visible = false
-	ship_visual.add_child(engine_streak)
+	engine_trail.process_material = engine_trail_process
 
-	# Store materials for runtime updates
-	engine_streak_mat = inner_mat  # we'll pulse the inner core
+	# Draw pass — tall narrow quad (stretched along velocity Y axis)
+	var draw_mesh := QuadMesh.new()
+	draw_mesh.size = Vector2(0.04, 0.6)  # 4cm wide, 60cm long — thin streak
+	engine_trail.draw_pass_1 = draw_mesh
+
+	# Soft linear gradient texture — bright center, fading edges
+	var soft_line := GradientTexture2D.new()
+	soft_line.width = 32
+	soft_line.height = 64
+	soft_line.fill = GradientTexture2D.FILL_LINEAR
+	soft_line.fill_from = Vector2(0.5, 0.0)
+	soft_line.fill_to = Vector2(0.5, 1.0)
+	var line_grad := Gradient.new()
+	line_grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 0.9),
+		Color(1.0, 1.0, 1.0, 0.5),
+		Color(1.0, 1.0, 1.0, 0.0),
+	])
+	line_grad.offsets = PackedFloat32Array([0.0, 0.3, 1.0])
+	soft_line.gradient = line_grad
+
+	var draw_mat := StandardMaterial3D.new()
+	draw_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	draw_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	draw_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw_mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	draw_mat.vertex_color_use_as_albedo = true
+	draw_mat.albedo_color = Color.WHITE
+	draw_mat.albedo_texture = soft_line
+	draw_mat.no_depth_test = true
+	draw_mesh.material = draw_mat
+
+	ship_visual.add_child(engine_trail)
 
 	# ── Point light ──
 	engine_light = OmniLight3D.new()
@@ -805,11 +841,8 @@ func _update_engine(_delta):
 		engine_bar_mat.emission = Color(0.8, 0.9, 1.0)
 		engine_bar_mat.emission_energy_multiplier = 10.0 * flicker
 
-		# Streak visible — razor-thin trailing lines
-		engine_streak.visible = true
-		# Subtle brightness pulse on the inner core
-		engine_streak_mat.albedo_color = Color(0.7, 0.85, 1.0, 0.3 * flicker)
-		engine_streak_mat.emission_energy_multiplier = 8.0 * flicker
+		# Trail on
+		engine_trail.emitting = true
 
 		engine_light.light_energy = 4.0 * flicker
 		engine_light.light_color = Color(0.6, 0.8, 1.0)
@@ -819,8 +852,8 @@ func _update_engine(_delta):
 		engine_bar_mat.emission = Color(0.4, 0.65, 1.0)
 		engine_bar_mat.emission_energy_multiplier = 4.0 * flicker
 
-		# No streak
-		engine_streak.visible = false
+		# Trail off (existing particles fade naturally)
+		engine_trail.emitting = false
 
 		engine_light.light_energy = 1.5 * flicker
 		engine_light.light_color = Color(0.4, 0.6, 1.0)
