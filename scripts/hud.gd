@@ -6,7 +6,8 @@ extends Control
 var health_bar: ProgressBar
 var boost_bar: ProgressBar
 var laser_bar: ProgressBar
-var missile_label: Label
+var missile_container: Control
+var missile_count_label: Label
 var score_label: Label
 var hits_label: Label
 var lives_label: Label
@@ -362,16 +363,47 @@ func _build_laser_bar():
 	box.add_child(laser_bar)
 
 
-# ── Missile Counter ───────────────────────────────────────────
+# ── Missile Counter (icon + count) ────────────────────────────
 
 func _build_missile_counter():
-	missile_label = Label.new()
-	missile_label.text = "MISSILES: 8"
-	missile_label.position = Vector2(20, 118)
-	missile_label.add_theme_font_size_override("font_size", 16)
-	missile_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.2))
-	missile_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(missile_label)
+	missile_container = Control.new()
+	missile_container.position = Vector2(20, 158)
+	missile_container.custom_minimum_size = Vector2(100, 24)
+	missile_container.size = Vector2(100, 24)
+	missile_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	missile_container.draw.connect(_draw_missile_icon)
+	add_child(missile_container)
+
+	missile_count_label = Label.new()
+	missile_count_label.text = "x 8"
+	missile_count_label.position = Vector2(48, 158)
+	missile_count_label.add_theme_font_size_override("font_size", 18)
+	missile_count_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.2))
+	missile_count_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(missile_count_label)
+
+
+func _draw_missile_icon():
+	var col := Color(1.0, 0.5, 0.2, 0.9)
+	# Missile body — elongated shape pointing right
+	var body := PackedVector2Array([
+		Vector2(4, 8), Vector2(26, 8), Vector2(28, 12),
+		Vector2(26, 16), Vector2(4, 16),
+	])
+	missile_container.draw_colored_polygon(body, col)
+	# Nose cone
+	missile_container.draw_colored_polygon(PackedVector2Array([
+		Vector2(26, 7), Vector2(34, 12), Vector2(26, 17),
+	]), Color(1.0, 0.7, 0.3))
+	# Fins (top and bottom)
+	missile_container.draw_colored_polygon(PackedVector2Array([
+		Vector2(4, 8), Vector2(10, 8), Vector2(4, 2),
+	]), col)
+	missile_container.draw_colored_polygon(PackedVector2Array([
+		Vector2(4, 16), Vector2(10, 16), Vector2(4, 22),
+	]), col)
+	# Exhaust glow
+	missile_container.draw_circle(Vector2(3, 12), 3.0, Color(1.0, 0.6, 0.1, 0.6))
 
 
 # ── Hit Counter (top-center) ──────────────────────────────────
@@ -517,8 +549,8 @@ func _on_laser_energy(val: float, val_max: float):
 
 
 func _on_missiles(count: int):
-	if missile_label:
-		missile_label.text = "MISSILES: %d" % count
+	if missile_count_label:
+		missile_count_label.text = "x %d" % count
 
 
 func _on_score(pts: int):

@@ -87,6 +87,13 @@ var lives: int = 3
 var ship_visual: Node3D
 var shoot_point: Marker3D
 
+# ── Engine burn ──
+var engine_cone: MeshInstance3D
+var engine_cone_mat: StandardMaterial3D
+var engine_glow: MeshInstance3D
+var engine_glow_mat: StandardMaterial3D
+var engine_light: OmniLight3D
+
 # ── Signals ──
 signal health_changed(hp: float, hp_max: float)
 signal boost_changed(val: float, val_max: float)
@@ -102,6 +109,7 @@ signal ship_destroyed
 func _ready():
 	add_to_group("player")
 	_build_visuals()
+	_build_engine()
 	_build_collision()
 	shoot_point = Marker3D.new()
 	shoot_point.position = Vector3(0, 0, -1.5)
@@ -122,6 +130,7 @@ func _process(delta):
 	_handle_lock_on(delta)
 	_handle_missile_fire()
 	_handle_flash(delta)
+	_update_engine(delta)
 	if fire_timer > 0:
 		fire_timer -= delta
 	if invuln_timer > 0:
@@ -203,23 +212,25 @@ func _handle_snap_target():
 # ── Shooting (R2) ────────────────────────────────────────────
 
 func _handle_shooting(delta):
-	var firing := Input.is_action_pressed("shoot") and fire_timer <= 0 and not laser_recharging and laser_energy > 0
+	var trigger_held := Input.is_action_pressed("shoot")
+	var can_fire := trigger_held and fire_timer <= 0 and not laser_recharging and laser_energy > 0
 
-	if firing:
+	if can_fire:
 		_fire_laser()
 		fire_timer = fire_rate
-		laser_energy = maxf(laser_energy - laser_drain_rate * fire_rate, 0.0)
+
+	# Drain continuously while trigger is held (not just per-shot)
+	if trigger_held and laser_energy > 0 and not laser_recharging:
+		laser_energy = maxf(laser_energy - laser_drain_rate * delta, 0.0)
 		if laser_energy <= 0:
 			laser_recharging = true
 		laser_energy_changed.emit(laser_energy, max_laser_energy)
-	else:
-		# Recharge when not firing
-		if laser_energy < max_laser_energy:
-			laser_energy = minf(laser_energy + laser_recharge_rate * delta, max_laser_energy)
-			# Allow firing again once recharged past 25%
-			if laser_recharging and laser_energy >= max_laser_energy * 0.25:
-				laser_recharging = false
-			laser_energy_changed.emit(laser_energy, max_laser_energy)
+	elif not trigger_held and laser_energy < max_laser_energy:
+		# Recharge only when trigger is released
+		laser_energy = minf(laser_energy + laser_recharge_rate * delta, max_laser_energy)
+		if laser_recharging and laser_energy >= max_laser_energy * 0.25:
+			laser_recharging = false
+		laser_energy_changed.emit(laser_energy, max_laser_energy)
 
 
 func _fire_laser():
@@ -700,6 +711,97 @@ func _die_explosion():
 		fireball.queue_free()
 		light.queue_free()
 	)
+
+
+# ── Engine Burn Effect ────────────────────────────────────────
+
+func _build_engine():
+	# Flame cone — elongated behind the ship
+	engine_cone = MeshInstance3D.new()
+	var cone_mesh := CylinderMesh.new()
+	cone_mesh.top_radius = 0.0
+	cone_mesh.bottom_radius = 0.25
+	cone_mesh.height = 1.2
+	cone_mesh.radial_segments = 12
+	engine_cone.mesh = cone_mesh
+	engine_cone.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# Point backward (+Z) — cone tip faces away from ship
+	engine_cone.rotation_degrees.x = -90
+	engine_cone.position = Vector3(0, 0, 1.2)
+
+	engine_cone_mat = StandardMaterial3D.new()
+	engine_cone_mat.albedo_color = Color(0.4, 0.7, 1.0, 0.6)
+	engine_cone_mat.emission_enabled = true
+	engine_cone_mat.emission = Color(0.3, 0.5, 1.0)
+	engine_cone_mat.emission_energy_multiplier = 3.0
+	engine_cone_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	engine_cone_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	engine_cone.material_override = engine_cone_mat
+	ship_visual.add_child(engine_cone)
+
+	# Core glow — small bright sphere at the nozzle
+	engine_glow = MeshInstance3D.new()
+	var glow_mesh := SphereMesh.new()
+	glow_mesh.radius = 0.18
+	glow_mesh.height = 0.36
+	engine_glow.mesh = glow_mesh
+	engine_glow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	engine_glow.position = Vector3(0, 0, 0.7)
+
+	engine_glow_mat = StandardMaterial3D.new()
+	engine_glow_mat.albedo_color = Color(0.7, 0.85, 1.0)
+	engine_glow_mat.emission_enabled = true
+	engine_glow_mat.emission = Color(0.6, 0.8, 1.0)
+	engine_glow_mat.emission_energy_multiplier = 5.0
+	engine_glow_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	engine_glow.material_override = engine_glow_mat
+	ship_visual.add_child(engine_glow)
+
+	# Point light behind ship
+	engine_light = OmniLight3D.new()
+	engine_light.position = Vector3(0, 0, 1.0)
+	engine_light.light_color = Color(0.4, 0.6, 1.0)
+	engine_light.light_energy = 1.5
+	engine_light.omni_range = 4.0
+	ship_visual.add_child(engine_light)
+
+
+func _update_engine(_delta):
+	if engine_cone == null:
+		return
+
+	var t := Time.get_ticks_msec() / 1000.0
+	# Flicker: small random-ish variation
+	var flicker := 0.9 + sin(t * 25.0) * 0.08 + sin(t * 41.0) * 0.05
+
+	if is_boosting:
+		# Boost: longer flame, hotter color (blue-white → orange tips), brighter
+		engine_cone.scale = Vector3(1.6, 2.5, 1.6) * flicker
+		engine_cone_mat.albedo_color = Color(0.6, 0.8, 1.0, 0.8)
+		engine_cone_mat.emission = Color(0.5, 0.7, 1.0)
+		engine_cone_mat.emission_energy_multiplier = 8.0 * flicker
+
+		engine_glow.scale = Vector3(1.4, 1.4, 1.4)
+		engine_glow_mat.albedo_color = Color(1.0, 0.95, 0.9)
+		engine_glow_mat.emission = Color(1.0, 0.9, 0.7)
+		engine_glow_mat.emission_energy_multiplier = 12.0 * flicker
+
+		engine_light.light_energy = 4.0 * flicker
+		engine_light.light_color = Color(0.6, 0.8, 1.0)
+	else:
+		# Normal cruise: modest blue flame
+		engine_cone.scale = Vector3(1.0, 1.0, 1.0) * flicker
+		engine_cone_mat.albedo_color = Color(0.4, 0.7, 1.0, 0.6)
+		engine_cone_mat.emission = Color(0.3, 0.5, 1.0)
+		engine_cone_mat.emission_energy_multiplier = 3.0 * flicker
+
+		engine_glow.scale = Vector3(1.0, 1.0, 1.0)
+		engine_glow_mat.albedo_color = Color(0.7, 0.85, 1.0)
+		engine_glow_mat.emission = Color(0.6, 0.8, 1.0)
+		engine_glow_mat.emission_energy_multiplier = 5.0 * flicker
+
+		engine_light.light_energy = 1.5 * flicker
+		engine_light.light_color = Color(0.4, 0.6, 1.0)
 
 
 # ── Visual Construction ───────────────────────────────────────
