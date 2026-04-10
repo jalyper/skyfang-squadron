@@ -736,47 +736,44 @@ func _build_engine():
 	engine_bar.material_override = engine_bar_mat
 	ship_visual.add_child(engine_bar)
 
-	# ── Jet trail particles — velocity-stretched for linear streaks ──
+	# ── Jet trail — many overlapping soft dots that blend into a smooth plume ──
 	engine_trail = GPUParticles3D.new()
 	engine_trail.emitting = false
-	engine_trail.amount = 30
-	engine_trail.lifetime = 0.6
+	engine_trail.amount = 60
+	engine_trail.lifetime = 0.5
 	engine_trail.explosiveness = 0.0
-	engine_trail.randomness = 0.05
+	engine_trail.randomness = 0.1
 	engine_trail.fixed_fps = 60
-	# Use global coords so the trail stays in world space as the ship moves
-	engine_trail.local_coords = false
+	engine_trail.local_coords = false  # trail hangs in world space
 	engine_trail.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	engine_trail.position = Vector3(0, 0, 0.7)
 
 	engine_trail_process = ParticleProcessMaterial.new()
 	engine_trail_process.direction = Vector3(0, 0, 1)
-	engine_trail_process.spread = 1.5  # very tight — nearly a line
-	engine_trail_process.initial_velocity_min = 6.0
-	engine_trail_process.initial_velocity_max = 8.0
+	engine_trail_process.spread = 3.0
+	engine_trail_process.initial_velocity_min = 5.0
+	engine_trail_process.initial_velocity_max = 7.0
 	engine_trail_process.gravity = Vector3.ZERO
-	engine_trail_process.damping_min = 2.0
-	engine_trail_process.damping_max = 3.0
-	# Align particles along their velocity for stretched streaks
-	engine_trail_process.particle_flag_align_y = true
+	engine_trail_process.damping_min = 1.5
+	engine_trail_process.damping_max = 2.5
 
-	# Scale: thin on X (width), long on Y (along velocity)
-	engine_trail_process.scale_min = 0.8
+	# Scale: shrink over lifetime
+	engine_trail_process.scale_min = 0.6
 	engine_trail_process.scale_max = 1.0
 	var scale_curve := CurveTexture.new()
 	var sc := Curve.new()
 	sc.add_point(Vector2(0.0, 1.0))
-	sc.add_point(Vector2(0.5, 0.7))
+	sc.add_point(Vector2(0.3, 0.8))
 	sc.add_point(Vector2(1.0, 0.0))
 	scale_curve.curve = sc
 	engine_trail_process.scale_curve = scale_curve
 
-	# Color ramp: bright white-blue → blue → fade out
+	# Color ramp: white-blue → blue → transparent
 	var color_ramp := GradientTexture1D.new()
 	var grad := Gradient.new()
 	grad.colors = PackedColorArray([
-		Color(0.8, 0.9, 1.0, 0.5),
-		Color(0.4, 0.6, 1.0, 0.3),
+		Color(0.8, 0.9, 1.0, 0.4),
+		Color(0.4, 0.6, 1.0, 0.25),
 		Color(0.2, 0.4, 0.9, 0.0),
 	])
 	grad.offsets = PackedFloat32Array([0.0, 0.4, 1.0])
@@ -785,35 +782,35 @@ func _build_engine():
 
 	engine_trail.process_material = engine_trail_process
 
-	# Draw pass — tall narrow quad (stretched along velocity Y axis)
+	# Draw pass — square quad, texture does the shaping
 	var draw_mesh := QuadMesh.new()
-	draw_mesh.size = Vector2(0.04, 0.6)  # 4cm wide, 60cm long — thin streak
+	draw_mesh.size = Vector2(0.35, 0.35)
 	engine_trail.draw_pass_1 = draw_mesh
 
-	# Soft linear gradient texture — bright center, fading edges
-	var soft_line := GradientTexture2D.new()
-	soft_line.width = 32
-	soft_line.height = 64
-	soft_line.fill = GradientTexture2D.FILL_LINEAR
-	soft_line.fill_from = Vector2(0.5, 0.0)
-	soft_line.fill_to = Vector2(0.5, 1.0)
-	var line_grad := Gradient.new()
-	line_grad.colors = PackedColorArray([
-		Color(1.0, 1.0, 1.0, 0.9),
-		Color(1.0, 1.0, 1.0, 0.5),
+	# Soft radial gradient — fuzzy circle, white center to transparent edge
+	var soft_dot := GradientTexture2D.new()
+	soft_dot.width = 64
+	soft_dot.height = 64
+	soft_dot.fill = GradientTexture2D.FILL_RADIAL
+	soft_dot.fill_from = Vector2(0.5, 0.5)
+	soft_dot.fill_to = Vector2(0.5, 0.0)
+	var dot_grad := Gradient.new()
+	dot_grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 1.0),
+		Color(1.0, 1.0, 1.0, 0.3),
 		Color(1.0, 1.0, 1.0, 0.0),
 	])
-	line_grad.offsets = PackedFloat32Array([0.0, 0.3, 1.0])
-	soft_line.gradient = line_grad
+	dot_grad.offsets = PackedFloat32Array([0.0, 0.4, 1.0])
+	soft_dot.gradient = dot_grad
 
 	var draw_mat := StandardMaterial3D.new()
 	draw_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	draw_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	draw_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	draw_mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	draw_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	draw_mat.vertex_color_use_as_albedo = true
 	draw_mat.albedo_color = Color.WHITE
-	draw_mat.albedo_texture = soft_line
+	draw_mat.albedo_texture = soft_dot
 	draw_mat.no_depth_test = true
 	draw_mesh.material = draw_mat
 
