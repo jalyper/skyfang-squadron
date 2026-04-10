@@ -5,9 +5,40 @@ var game_world: Node3D = null
 var player: Area3D = null
 var projectiles_container: Node3D = null
 
+# ── Persistent state across scenes (solar map progress) ──
+var current_level_id: String = ""
+var beaten_levels: Dictionary = {}   # level_id → {hits: int, score: int}
+var total_score: int = 0
+var lives: int = 3
+
 
 func _ready():
 	_setup_input_actions()
+	_setup_ui_actions()
+
+
+func mark_level_beaten(level_id: String, hits: int, score: int):
+	beaten_levels[level_id] = {"hits": hits, "score": score}
+	total_score += score
+
+
+func is_level_beaten(level_id: String) -> bool:
+	return beaten_levels.has(level_id)
+
+
+func reset_campaign():
+	beaten_levels.clear()
+	total_score = 0
+	lives = 3
+	current_level_id = ""
+
+
+func _setup_ui_actions():
+	# Map navigation — reuse move actions but also add explicit ui actions
+	_add_key_action("ui_select", KEY_ENTER)
+	_add_joy_button("ui_select", JOY_BUTTON_A)
+	_add_key_action("ui_back", KEY_ESCAPE)
+	_add_joy_button("ui_back", JOY_BUTTON_B)
 
 
 func _setup_input_actions():

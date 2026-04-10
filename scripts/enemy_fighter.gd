@@ -69,6 +69,7 @@ func take_damage(amount: float):
 		var p = GameManager.player
 		if p and p.has_method("add_score"):
 			p.add_score(100)
+			p.add_hit()
 		_explode_and_chain()
 
 

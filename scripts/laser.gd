@@ -41,21 +41,39 @@ func _on_hit(area: Area3D):
 
 
 func _build_mesh():
+	# Main bolt — elongated tapered cylinder, bright cyan like Star Fox
 	var mi := MeshInstance3D.new()
 	var mesh := CylinderMesh.new()
-	mesh.top_radius = 0.05
-	mesh.bottom_radius = 0.05
-	mesh.height = 1.2
+	mesh.top_radius = 0.03
+	mesh.bottom_radius = 0.06
+	mesh.height = 1.6
 	mi.mesh = mesh
 	mi.rotation_degrees.x = 90
 
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.3, 1.0, 0.4)
+	mat.albedo_color = Color(0.4, 0.9, 1.0)
 	mat.emission_enabled = true
-	mat.emission = Color(0.3, 1.0, 0.4)
-	mat.emission_energy_multiplier = 3.0
+	mat.emission = Color(0.3, 0.8, 1.0)
+	mat.emission_energy_multiplier = 5.0
 	mi.material_override = mat
 	add_child(mi)
+
+	# Inner core glow — brighter white-cyan center
+	var core := MeshInstance3D.new()
+	var core_mesh := CylinderMesh.new()
+	core_mesh.top_radius = 0.015
+	core_mesh.bottom_radius = 0.035
+	core_mesh.height = 1.5
+	core.mesh = core_mesh
+	core.rotation_degrees.x = 90
+
+	var core_mat := StandardMaterial3D.new()
+	core_mat.albedo_color = Color(0.8, 0.95, 1.0)
+	core_mat.emission_enabled = true
+	core_mat.emission = Color(0.9, 1.0, 1.0)
+	core_mat.emission_energy_multiplier = 8.0
+	core.material_override = core_mat
+	add_child(core)
 
 
 func _build_collision():

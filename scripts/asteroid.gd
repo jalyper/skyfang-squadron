@@ -1,6 +1,8 @@
 extends Area3D
 ## Destructible asteroid hazard. Misshapen, slowly tumbles and drifts.
-## Has a chance to drop a Double Shot powerup when destroyed.
+## Drops Double Shot or Shield pickups when destroyed.
+
+const PickupScript = preload("res://scripts/pickup.gd")
 
 var health: float = 40.0
 var rot_speed: Vector3
@@ -38,6 +40,7 @@ func take_damage(amount: float):
 		var p = GameManager.player
 		if p and p.has_method("add_score"):
 			p.add_score(25)
+			p.add_hit()
 		# Chance to drop powerup
 		if randf() < drop_chance:
 			_spawn_powerup()
@@ -77,71 +80,18 @@ func _spawn_powerup():
 	var gw = GameManager.game_world
 	if gw == null:
 		return
+
 	var pickup := Area3D.new()
-	pickup.add_to_group("powerups")
+	pickup.set_script(PickupScript)
+
+	# 30% chance of shield, 70% double shot
+	if randf() < 0.3:
+		pickup.pickup_type = PickupScript.PickupType.SHIELD
+	else:
+		pickup.pickup_type = PickupScript.PickupType.DOUBLE_SHOT
+
 	pickup.position = global_position
-
-	# Glowing rotating icon
-	var mi := MeshInstance3D.new()
-	var mesh := BoxMesh.new()
-	mesh.size = Vector3(0.8, 0.8, 0.8)
-	mi.mesh = mesh
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.2, 1.0, 0.5, 0.9)
-	mat.emission_enabled = true
-	mat.emission = Color(0.1, 1.0, 0.4)
-	mat.emission_energy_multiplier = 4.0
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mi.material_override = mat
-	pickup.add_child(mi)
-
-	var col := CollisionShape3D.new()
-	var shape := SphereShape3D.new()
-	shape.radius = 1.5  # generous pickup radius
-	col.shape = shape
-	pickup.add_child(col)
-
-	# Label
-	var label_node := MeshInstance3D.new()
-	var label_mesh := QuadMesh.new()
-	label_mesh.size = Vector2(2.0, 0.6)
-	label_node.mesh = label_mesh
-	label_node.position.y = 1.2
-	label_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var label_mat := StandardMaterial3D.new()
-	label_mat.albedo_color = Color(0.2, 1.0, 0.5)
-	label_mat.emission_enabled = true
-	label_mat.emission = Color(0.1, 1.0, 0.4)
-	label_mat.emission_energy_multiplier = 2.0
-	label_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	label_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	label_node.material_override = label_mat
-	pickup.add_child(label_node)
-
 	gw.add_child(pickup)
-
-	# Connect pickup detection
-	pickup.area_entered.connect(func(area: Area3D):
-		if area.is_in_group("player"):
-			var p = GameManager.player
-			if p and p.has_method("activate_double_shot"):
-				p.activate_double_shot()
-			pickup.queue_free()
-	)
-
-	# Rotate and bob the pickup
-	pickup.set_meta("_time", 0.0)
-	pickup.set_process(true)
-	var orig_y: float = global_position.y
-	pickup.set_meta("_orig_y", orig_y)
-	# Use a simple script-like approach via the tree
-	var timer := Timer.new()
-	timer.wait_time = 8.0
-	timer.one_shot = true
-	timer.timeout.connect(pickup.queue_free)
-	pickup.add_child(timer)
-	timer.start()
 
 
 func _build_mesh():

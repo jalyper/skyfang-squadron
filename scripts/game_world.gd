@@ -9,6 +9,7 @@ const EnemyFighterScript = preload("res://scripts/enemy_fighter.gd")
 const TurretScript = preload("res://scripts/turret.gd")
 const HudScript = preload("res://scripts/hud.gd")
 const SquadCommsScript = preload("res://scripts/squad_comms.gd")
+const PickupScript = preload("res://scripts/pickup.gd")
 
 # Rail
 var rail_speed: float = 16.0
@@ -62,6 +63,7 @@ func _ready():
 	_create_camera()
 	_create_hazards()
 	_create_enemies()
+	_create_pickups()
 	_create_ui()
 	_setup_comms_triggers()
 
@@ -594,6 +596,24 @@ func _create_enemies():
 			enemies_container.add_child(fighter)
 
 
+# ── Pickups (guaranteed shield recharges at key points) ──────
+
+func _create_pickups():
+	# Place two shield pickups at strategic locations:
+	# one mid-level after heavy combat, one in the asteroid field
+	var shield_positions := [
+		Vector3(0, 1, -295),   # after Act 2 combat gauntlet
+		Vector3(-2, 0, -505),  # mid asteroid field, Act 4
+	]
+	for pos in shield_positions:
+		var pickup := Area3D.new()
+		pickup.set_script(PickupScript)
+		pickup.pickup_type = PickupScript.PickupType.SHIELD
+		pickup.position = pos
+		pickup.lifetime = 999.0  # static pickups don't expire
+		hazards_container.add_child(pickup)
+
+
 # ── UI ────────────────────────────────────────────────────────
 
 func _create_ui():
@@ -651,6 +671,16 @@ func _on_level_complete():
 	if squad_comms and squad_comms.has_method("show_message"):
 		squad_comms.show_message("Raze", "Area clear. Good work, pack.", Color(0.3, 0.5, 0.9))
 	_despawn_shockwave()
+
+	# Record result and return to solar map after a delay
+	var level_id: String = GameManager.current_level_id
+	var hits: int = player.hit_count if player else 0
+	var score_val: int = player.score if player else 0
+	if level_id != "":
+		GameManager.mark_level_beaten(level_id, hits, score_val)
+
+	await get_tree().create_timer(3.0).timeout
+	_show_level_clear(hits, score_val)
 
 
 # ── Shockwave Pursuit ─────────────────────────────────────────
@@ -750,6 +780,68 @@ func _on_player_destroyed():
 	_show_game_over()
 
 
+func _show_level_clear(hits: int, score_val: int):
+	var canvas = CanvasLayer.new()
+	canvas.layer = 10
+	add_child(canvas)
+
+	var ui := Control.new()
+	ui.set_anchors_preset(Control.PRESET_FULL_RECT)
+	canvas.add_child(ui)
+
+	var overlay := ColorRect.new()
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.color = Color(0, 0, 0, 0.5)
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(overlay)
+
+	var vbox := VBoxContainer.new()
+	vbox.set_anchors_preset(Control.PRESET_CENTER)
+	vbox.offset_left = -250
+	vbox.offset_top = -120
+	vbox.offset_right = 250
+	vbox.offset_bottom = 120
+	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_theme_constant_override("separation", 16)
+	ui.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "MISSION COMPLETE"
+	title.add_theme_font_size_override("font_size", 44)
+	title.add_theme_color_override("font_color", Color(0.3, 1.0, 0.4))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+
+	var hits_lbl := Label.new()
+	hits_lbl.text = "TOTAL HITS: %d" % hits
+	hits_lbl.add_theme_font_size_override("font_size", 24)
+	hits_lbl.add_theme_color_override("font_color", Color(0.9, 0.9, 0.3))
+	hits_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(hits_lbl)
+
+	var score_lbl := Label.new()
+	score_lbl.text = "SCORE: %d" % score_val
+	score_lbl.add_theme_font_size_override("font_size", 20)
+	score_lbl.add_theme_color_override("font_color", Color.WHITE)
+	score_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(score_lbl)
+
+	var spacer := Control.new()
+	spacer.custom_minimum_size = Vector2(0, 10)
+	vbox.add_child(spacer)
+
+	var cont_btn := Button.new()
+	cont_btn.text = "CONTINUE"
+	cont_btn.custom_minimum_size = Vector2(250, 50)
+	cont_btn.add_theme_font_size_override("font_size", 22)
+	cont_btn.focus_mode = Control.FOCUS_ALL
+	cont_btn.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/solar_map.tscn"))
+	vbox.add_child(cont_btn)
+
+	await get_tree().process_frame
+	cont_btn.grab_focus()
+
+
 func _show_game_over():
 	var canvas = CanvasLayer.new()
 	canvas.layer = 10  # on top of everything
@@ -790,7 +882,17 @@ func _show_game_over():
 	spacer.custom_minimum_size = Vector2(0, 20)
 	vbox.add_child(spacer)
 
-	# Try Again button
+	# Deduct a life
+	GameManager.lives -= 1
+
+	var lives_lbl := Label.new()
+	lives_lbl.text = "LIVES: %d" % maxi(GameManager.lives, 0)
+	lives_lbl.add_theme_font_size_override("font_size", 20)
+	lives_lbl.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	lives_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(lives_lbl)
+
+	# Try Again button (if lives remain)
 	var retry_btn := Button.new()
 	retry_btn.text = "TRY AGAIN"
 	retry_btn.custom_minimum_size = Vector2(250, 50)
@@ -798,6 +900,19 @@ func _show_game_over():
 	retry_btn.focus_mode = Control.FOCUS_ALL
 	retry_btn.pressed.connect(_on_retry)
 	vbox.add_child(retry_btn)
+
+	if GameManager.lives <= 0:
+		retry_btn.disabled = true
+		retry_btn.text = "NO LIVES LEFT"
+
+	# Return to Map button
+	var map_btn := Button.new()
+	map_btn.text = "SOLAR MAP"
+	map_btn.custom_minimum_size = Vector2(250, 50)
+	map_btn.add_theme_font_size_override("font_size", 22)
+	map_btn.focus_mode = Control.FOCUS_ALL
+	map_btn.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/solar_map.tscn"))
+	vbox.add_child(map_btn)
 
 	# Quit button
 	var quit_btn := Button.new()
@@ -809,12 +924,17 @@ func _show_game_over():
 	vbox.add_child(quit_btn)
 
 	# Set focus neighbors for D-pad navigation
-	retry_btn.focus_neighbor_bottom = retry_btn.get_path_to(quit_btn)
-	quit_btn.focus_neighbor_top = quit_btn.get_path_to(retry_btn)
+	retry_btn.focus_neighbor_bottom = retry_btn.get_path_to(map_btn)
+	map_btn.focus_neighbor_top = map_btn.get_path_to(retry_btn)
+	map_btn.focus_neighbor_bottom = map_btn.get_path_to(quit_btn)
+	quit_btn.focus_neighbor_top = quit_btn.get_path_to(map_btn)
 
 	# Grab focus after a frame so the layout is finalized
 	await get_tree().process_frame
-	retry_btn.grab_focus()
+	if GameManager.lives > 0:
+		retry_btn.grab_focus()
+	else:
+		map_btn.grab_focus()
 
 	# Gamepad A button may conflict with our "boost" action, so handle it manually
 	set_process_input(true)

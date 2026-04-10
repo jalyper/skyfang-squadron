@@ -48,6 +48,7 @@ func take_damage(amount: float):
 		var p = GameManager.player
 		if p and p.has_method("add_score"):
 			p.add_score(150)
+			p.add_hit()
 		queue_free()
 
 

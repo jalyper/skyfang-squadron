@@ -79,8 +79,10 @@ var flash_timer: float = 0.0
 var flash_duration: float = 0.25
 var is_flashing: bool = false
 
-# ── Score ──
+# ── Score / Hits / Lives ──
 var score: int = 0
+var hit_count: int = 0
+var lives: int = 3
 
 # ── Node refs ──
 var ship_visual: Node3D
@@ -91,6 +93,8 @@ signal health_changed(hp: float, hp_max: float)
 signal boost_changed(val: float, val_max: float)
 signal missiles_changed(count: int)
 signal score_changed(pts: int)
+signal hits_changed(count: int)
+signal lives_changed(count: int)
 signal phase_changed(is_active: bool, cooldown_ratio: float)
 signal ship_destroyed
 
@@ -275,6 +279,11 @@ func _fire_laser():
 func activate_double_shot():
 	double_shot = true
 	double_shot_timer = double_shot_duration
+
+
+func heal(amount: float):
+	health = minf(health + amount, max_health)
+	health_changed.emit(health, max_health)
 
 
 # ── Boost / Brake ─────────────────────────────────────────────
@@ -589,6 +598,11 @@ func take_damage(amount: float):
 func add_score(points: int):
 	score += points
 	score_changed.emit(score)
+
+
+func add_hit():
+	hit_count += 1
+	hits_changed.emit(hit_count)
 
 
 # ── Damage Flash (blink red) ─────────────────────────────────

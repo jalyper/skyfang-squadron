@@ -1,11 +1,14 @@
 extends Control
 ## In-flight HUD: right-stick crosshair, target brackets, lock-on progress,
-## shield/boost bars, missile counter, score, phase indicator, boost speed lines.
+## shield/boost bars, missile counter, hit counter, lives, phase indicator,
+## boost speed lines. Inspired by Star Fox 64 HUD layout.
 
 var health_bar: ProgressBar
 var boost_bar: ProgressBar
 var missile_label: Label
 var score_label: Label
+var hits_label: Label
+var lives_label: Label
 var phase_bar: ProgressBar
 var phase_status_label: Label
 var crosshair: Control
@@ -28,6 +31,8 @@ func _ready():
 	_build_health_bar()
 	_build_boost_bar()
 	_build_missile_counter()
+	_build_hits_counter()
+	_build_lives_display()
 	_build_score_display()
 	_build_phase_indicator()
 	_build_threat_indicator()
@@ -58,8 +63,15 @@ func _connect_player():
 		p.missiles_changed.connect(_on_missiles)
 	if p.has_signal("score_changed"):
 		p.score_changed.connect(_on_score)
+	if p.has_signal("hits_changed"):
+		p.hits_changed.connect(_on_hits)
+	if p.has_signal("lives_changed"):
+		p.lives_changed.connect(_on_lives)
 	if p.has_signal("phase_changed"):
 		p.phase_changed.connect(_on_phase)
+	# Initialize lives display
+	if lives_label and "lives" in p:
+		lives_label.text = "x %d" % p.lives
 
 
 # ── Crosshair (follows right-stick reticle) ───────────────────
@@ -76,7 +88,7 @@ func _build_crosshair():
 
 func _draw_crosshair():
 	var c := crosshair.size / 2.0
-	var col := Color(0.3, 1.0, 0.4, 0.8)
+	var col := Color(0.3, 0.9, 1.0, 0.8)
 	var gap := 8.0
 	var ln := 14.0
 	crosshair.draw_line(Vector2(c.x - gap - ln, c.y), Vector2(c.x - gap, c.y), col, 2.0)
@@ -249,7 +261,7 @@ func _draw_speed_lines():
 		speed_lines_layer.draw_line(p1, p2, col, 1.5)
 
 
-# ── Health Bar ────────────────────────────────────────────────
+# ── Health Bar (top-left) ────────────────────────────────────
 
 func _build_health_bar():
 	var box := VBoxContainer.new()
@@ -327,15 +339,73 @@ func _build_missile_counter():
 	add_child(missile_label)
 
 
+# ── Hit Counter (top-center, Star Fox style) ──────────────────
+
+func _build_hits_counter():
+	var box := VBoxContainer.new()
+	box.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	box.offset_top = 16
+	box.offset_left = -60
+	box.offset_right = 60
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(box)
+
+	var title := Label.new()
+	title.text = "TOTAL HITS"
+	title.add_theme_font_size_override("font_size", 14)
+	title.add_theme_color_override("font_color", Color(0.9, 0.9, 0.3))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(title)
+
+	hits_label = Label.new()
+	hits_label.text = "000"
+	hits_label.add_theme_font_size_override("font_size", 28)
+	hits_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0))
+	hits_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hits_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(hits_label)
+
+
+# ── Lives Display (top-right, ship icon + count) ─────────────
+
+func _build_lives_display():
+	var box := HBoxContainer.new()
+	box.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	box.offset_top = 16
+	box.offset_right = -20
+	box.offset_left = -140
+	box.alignment = BoxContainer.ALIGNMENT_END
+	box.add_theme_constant_override("separation", 8)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(box)
+
+	# Ship icon (triangle drawn as text placeholder)
+	var icon := Label.new()
+	icon.text = ">"  # ship silhouette placeholder
+	icon.add_theme_font_size_override("font_size", 20)
+	icon.add_theme_color_override("font_color", Color(0.3, 0.8, 1.0))
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(icon)
+
+	lives_label = Label.new()
+	lives_label.text = "x 3"
+	lives_label.add_theme_font_size_override("font_size", 20)
+	lives_label.add_theme_color_override("font_color", Color.WHITE)
+	lives_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(lives_label)
+
+
 # ── Score ─────────────────────────────────────────────────────
 
 func _build_score_display():
 	score_label = Label.new()
 	score_label.text = "SCORE: 0"
 	score_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	score_label.position = Vector2(-160, 20)
-	score_label.add_theme_font_size_override("font_size", 20)
-	score_label.add_theme_color_override("font_color", Color.WHITE)
+	score_label.position = Vector2(-160, 46)
+	score_label.add_theme_font_size_override("font_size", 16)
+	score_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
 	score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	score_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(score_label)
@@ -408,6 +478,16 @@ func _on_score(pts: int):
 		score_label.text = "SCORE: %d" % pts
 
 
+func _on_hits(count: int):
+	if hits_label:
+		hits_label.text = "%03d" % count
+
+
+func _on_lives(count: int):
+	if lives_label:
+		lives_label.text = "x %d" % count
+
+
 func _on_phase(is_active: bool, ratio: float):
 	if phase_bar == null or phase_status_label == null:
 		return
@@ -442,7 +522,7 @@ func _on_phase(is_active: bool, ratio: float):
 func _build_threat_indicator():
 	threat_container = VBoxContainer.new()
 	threat_container.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	threat_container.offset_top = 60
+	threat_container.offset_top = 80
 	threat_container.offset_left = 660
 	threat_container.offset_right = -660
 	threat_container.alignment = BoxContainer.ALIGNMENT_CENTER
