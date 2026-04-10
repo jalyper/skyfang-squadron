@@ -87,12 +87,8 @@ var lives: int = 3
 var ship_visual: Node3D
 var shoot_point: Marker3D
 
-# ── Engine burn ──
-var engine_bar: MeshInstance3D         # LED bar across stern
-var engine_bar_mat: StandardMaterial3D
-var engine_trail: GPUParticles3D       # jet trail (boost only)
-var engine_trail_process: ParticleProcessMaterial
-var engine_light: OmniLight3D
+# ── Engine lights ──
+var engine_lights: Array = []  # OmniLight3D instances at engine positions
 
 # ── Signals ──
 signal health_changed(hp: float, hp_max: float)
@@ -109,7 +105,6 @@ signal ship_destroyed
 func _ready():
 	add_to_group("player")
 	_build_visuals()
-	_build_engine()
 	_build_collision()
 	shoot_point = Marker3D.new()
 	shoot_point.position = Vector3(0, 0, -1.5)
@@ -130,7 +125,6 @@ func _process(delta):
 	_handle_lock_on(delta)
 	_handle_missile_fire()
 	_handle_flash(delta)
-	_update_engine(delta)
 	if fire_timer > 0:
 		fire_timer -= delta
 	if invuln_timer > 0:
@@ -711,149 +705,6 @@ func _die_explosion():
 		fireball.queue_free()
 		light.queue_free()
 	)
-
-
-# ── Engine Burn Effect ────────────────────────────────────────
-# Normal flight: glowing LED bar across the stern.
-# Boosting: bar intensifies + particle jet trail streams behind — velocity-
-# stretched billboards forming a smooth, linear exhaust plume.
-
-func _build_engine():
-	# ── LED bar — flat wide box across the stern ──
-	engine_bar = MeshInstance3D.new()
-	var bar_mesh := BoxMesh.new()
-	bar_mesh.size = Vector3(1.2, 0.12, 0.06)
-	engine_bar.mesh = bar_mesh
-	engine_bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	engine_bar.position = Vector3(0, 0, 0.65)
-
-	engine_bar_mat = StandardMaterial3D.new()
-	engine_bar_mat.albedo_color = Color(0.5, 0.75, 1.0)
-	engine_bar_mat.emission_enabled = true
-	engine_bar_mat.emission = Color(0.4, 0.65, 1.0)
-	engine_bar_mat.emission_energy_multiplier = 4.0
-	engine_bar_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	engine_bar.material_override = engine_bar_mat
-	ship_visual.add_child(engine_bar)
-
-	# ── Jet trail — many overlapping soft dots that blend into a smooth plume ──
-	engine_trail = GPUParticles3D.new()
-	engine_trail.emitting = false
-	engine_trail.amount = 60
-	engine_trail.lifetime = 0.5
-	engine_trail.explosiveness = 0.0
-	engine_trail.randomness = 0.1
-	engine_trail.fixed_fps = 60
-	engine_trail.local_coords = false  # trail hangs in world space
-	engine_trail.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	engine_trail.position = Vector3(0, 0, 0.7)
-
-	engine_trail_process = ParticleProcessMaterial.new()
-	engine_trail_process.direction = Vector3(0, 0, 1)
-	engine_trail_process.spread = 3.0
-	engine_trail_process.initial_velocity_min = 5.0
-	engine_trail_process.initial_velocity_max = 7.0
-	engine_trail_process.gravity = Vector3.ZERO
-	engine_trail_process.damping_min = 1.5
-	engine_trail_process.damping_max = 2.5
-
-	# Scale: shrink over lifetime
-	engine_trail_process.scale_min = 0.6
-	engine_trail_process.scale_max = 1.0
-	var scale_curve := CurveTexture.new()
-	var sc := Curve.new()
-	sc.add_point(Vector2(0.0, 1.0))
-	sc.add_point(Vector2(0.3, 0.8))
-	sc.add_point(Vector2(1.0, 0.0))
-	scale_curve.curve = sc
-	engine_trail_process.scale_curve = scale_curve
-
-	# Color ramp: white-blue → blue → transparent
-	var color_ramp := GradientTexture1D.new()
-	var grad := Gradient.new()
-	grad.colors = PackedColorArray([
-		Color(0.8, 0.9, 1.0, 0.4),
-		Color(0.4, 0.6, 1.0, 0.25),
-		Color(0.2, 0.4, 0.9, 0.0),
-	])
-	grad.offsets = PackedFloat32Array([0.0, 0.4, 1.0])
-	color_ramp.gradient = grad
-	engine_trail_process.color_ramp = color_ramp
-
-	engine_trail.process_material = engine_trail_process
-
-	# Draw pass — square quad, texture does the shaping
-	var draw_mesh := QuadMesh.new()
-	draw_mesh.size = Vector2(0.35, 0.35)
-	engine_trail.draw_pass_1 = draw_mesh
-
-	# Soft radial gradient — fuzzy circle, white center to transparent edge
-	var soft_dot := GradientTexture2D.new()
-	soft_dot.width = 64
-	soft_dot.height = 64
-	soft_dot.fill = GradientTexture2D.FILL_RADIAL
-	soft_dot.fill_from = Vector2(0.5, 0.5)
-	soft_dot.fill_to = Vector2(0.5, 0.0)
-	var dot_grad := Gradient.new()
-	dot_grad.colors = PackedColorArray([
-		Color(1.0, 1.0, 1.0, 1.0),
-		Color(1.0, 1.0, 1.0, 0.3),
-		Color(1.0, 1.0, 1.0, 0.0),
-	])
-	dot_grad.offsets = PackedFloat32Array([0.0, 0.4, 1.0])
-	soft_dot.gradient = dot_grad
-
-	var draw_mat := StandardMaterial3D.new()
-	draw_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	draw_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	draw_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	draw_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	draw_mat.vertex_color_use_as_albedo = true
-	draw_mat.albedo_color = Color.WHITE
-	draw_mat.albedo_texture = soft_dot
-	draw_mat.no_depth_test = true
-	draw_mesh.material = draw_mat
-
-	ship_visual.add_child(engine_trail)
-
-	# ── Point light ──
-	engine_light = OmniLight3D.new()
-	engine_light.position = Vector3(0, 0, 0.8)
-	engine_light.light_color = Color(0.4, 0.6, 1.0)
-	engine_light.light_energy = 1.5
-	engine_light.omni_range = 4.0
-	ship_visual.add_child(engine_light)
-
-
-func _update_engine(_delta):
-	if engine_bar == null:
-		return
-
-	var t := Time.get_ticks_msec() / 1000.0
-	var flicker := 0.95 + sin(t * 30.0) * 0.05
-
-	if is_boosting:
-		# Bar goes white-hot
-		engine_bar_mat.albedo_color = Color(0.9, 0.95, 1.0)
-		engine_bar_mat.emission = Color(0.8, 0.9, 1.0)
-		engine_bar_mat.emission_energy_multiplier = 10.0 * flicker
-
-		# Trail on
-		engine_trail.emitting = true
-
-		engine_light.light_energy = 4.0 * flicker
-		engine_light.light_color = Color(0.6, 0.8, 1.0)
-	else:
-		# Steady LED bar glow
-		engine_bar_mat.albedo_color = Color(0.5, 0.75, 1.0)
-		engine_bar_mat.emission = Color(0.4, 0.65, 1.0)
-		engine_bar_mat.emission_energy_multiplier = 4.0 * flicker
-
-		# Trail off (existing particles fade naturally)
-		engine_trail.emitting = false
-
-		engine_light.light_energy = 1.5 * flicker
-		engine_light.light_color = Color(0.4, 0.6, 1.0)
 
 
 # ── Visual Construction ───────────────────────────────────────
