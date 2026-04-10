@@ -1,7 +1,6 @@
 extends Control
-## Star Fox-style squad comms panel. Shows a character portrait with species
-## initial, name, teammate shield bar, and typewriter-effect dialogue text.
-## References Star Fox 64 comms: bottom-left box with portrait + health.
+## Squad comms panel. Shows a character portrait with species initial, name,
+## teammate shield bar, and typewriter-effect dialogue text.
 
 var panel: PanelContainer
 var portrait_rect: ColorRect
@@ -32,7 +31,7 @@ var portrait_colors: Dictionary = {
 }
 
 var species: Dictionary = {
-	"Raze": "EAGLE", "Kiro": "WOLF", "Nyx": "FOX", "Bront": "BEAR",
+	"Raze": "HAWK", "Kiro": "LYNX", "Nyx": "VIPER", "Bront": "OX",
 }
 
 # Squad health — each teammate has independent shield value

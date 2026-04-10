@@ -41,7 +41,7 @@ func _on_hit(area: Area3D):
 
 
 func _build_mesh():
-	# Main bolt — elongated tapered cylinder, bright cyan like Star Fox
+	# Main bolt — elongated tapered cylinder, bright cyan
 	var mi := MeshInstance3D.new()
 	var mesh := CylinderMesh.new()
 	mesh.top_radius = 0.03

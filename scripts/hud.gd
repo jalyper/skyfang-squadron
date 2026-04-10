@@ -1,7 +1,7 @@
 extends Control
 ## In-flight HUD: right-stick crosshair, target brackets, lock-on progress,
 ## shield/boost bars, missile counter, hit counter, lives, phase indicator,
-## boost speed lines. Inspired by Star Fox 64 HUD layout.
+## boost speed lines.
 
 var health_bar: ProgressBar
 var boost_bar: ProgressBar
@@ -339,7 +339,7 @@ func _build_missile_counter():
 	add_child(missile_label)
 
 
-# ── Hit Counter (top-center, Star Fox style) ──────────────────
+# ── Hit Counter (top-center) ──────────────────────────────────
 
 func _build_hits_counter():
 	var box := VBoxContainer.new()

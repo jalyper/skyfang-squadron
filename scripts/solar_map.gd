@@ -1,7 +1,7 @@
 extends Control
-## Star Fox 64-style solar system map. Player navigates nodes connected by
-## paths, choosing which adjacent planet to tackle next. Beaten nodes glow,
-## locked ones are dimmed. Must beat adjacent nodes to unlock new ones.
+## Solar system map. Player navigates nodes connected by paths, choosing which
+## adjacent planet to tackle next. Beaten nodes glow, locked ones are dimmed.
+## Must beat adjacent nodes to unlock new ones.
 ##
 ## Layout zigzags left-right across rows, from start (bottom) to final boss (top).
 
@@ -13,62 +13,62 @@ const LEVEL_SCENE = "res://scenes/main.tscn"
 # Col positions: 0=far left, 1=left, 2=center, 3=right, 4=far right
 var map_nodes: Array = [
 	{
-		"id": "corneria", "name": "CORNERIA", "subtitle": "Homeworld",
+		"id": "aethon", "name": "AETHON", "subtitle": "Homeworld",
 		"row": 0, "col": 2, "color": Color(0.3, 0.6, 1.0),
-		"connections": ["meteo", "fortuna"],
+		"connections": ["cindral", "glacivus"],
 	},
 	{
-		"id": "meteo", "name": "METEO", "subtitle": "Asteroid Field",
+		"id": "cindral", "name": "CINDRAL", "subtitle": "Asteroid Field",
 		"row": 1, "col": 1, "color": Color(0.6, 0.5, 0.4),
-		"connections": ["katina", "sector_x"],
+		"connections": ["bastion", "rift_alpha"],
 	},
 	{
-		"id": "fortuna", "name": "FORTUNA", "subtitle": "Ice Planet",
+		"id": "glacivus", "name": "GLACIVUS", "subtitle": "Ice Planet",
 		"row": 1, "col": 3, "color": Color(0.7, 0.85, 1.0),
-		"connections": ["katina", "solar"],
+		"connections": ["bastion", "pyrrhon"],
 	},
 	{
-		"id": "sector_x", "name": "SECTOR X", "subtitle": "Combat Zone",
+		"id": "rift_alpha", "name": "RIFT ALPHA", "subtitle": "Combat Zone",
 		"row": 2, "col": 0, "color": Color(0.9, 0.3, 0.3),
-		"connections": ["macbeth"],
+		"connections": ["forgekeep"],
 	},
 	{
-		"id": "katina", "name": "KATINA", "subtitle": "Frontline Base",
+		"id": "bastion", "name": "BASTION", "subtitle": "Frontline Base",
 		"row": 2, "col": 2, "color": Color(0.4, 0.8, 0.4),
-		"connections": ["macbeth", "zoness"],
+		"connections": ["forgekeep", "maravoss"],
 	},
 	{
-		"id": "solar", "name": "SOLAR", "subtitle": "Burning Star",
+		"id": "pyrrhon", "name": "PYRRHON", "subtitle": "Burning Star",
 		"row": 2, "col": 4, "color": Color(1.0, 0.6, 0.1),
-		"connections": ["zoness"],
+		"connections": ["maravoss"],
 	},
 	{
-		"id": "macbeth", "name": "MACBETH", "subtitle": "Weapons Factory",
+		"id": "forgekeep", "name": "FORGEKEEP", "subtitle": "Weapons Factory",
 		"row": 3, "col": 1, "color": Color(0.5, 0.4, 0.3),
-		"connections": ["area6", "bolse"],
+		"connections": ["dreadline", "ironveil"],
 	},
 	{
-		"id": "zoness", "name": "ZONESS", "subtitle": "Toxic Sea",
+		"id": "maravoss", "name": "MARAVOSS", "subtitle": "Toxic Sea",
 		"row": 3, "col": 3, "color": Color(0.2, 0.7, 0.5),
-		"connections": ["bolse", "sector_z"],
+		"connections": ["ironveil", "rift_omega"],
 	},
 	{
-		"id": "area6", "name": "AREA 6", "subtitle": "Defense Fleet",
+		"id": "dreadline", "name": "DREADLINE", "subtitle": "Defense Fleet",
 		"row": 4, "col": 1, "color": Color(0.7, 0.3, 0.6),
-		"connections": ["venom"],
+		"connections": ["tyranthos"],
 	},
 	{
-		"id": "bolse", "name": "BOLSE", "subtitle": "Space Station",
+		"id": "ironveil", "name": "IRONVEIL", "subtitle": "Space Station",
 		"row": 4, "col": 2, "color": Color(0.5, 0.5, 0.7),
-		"connections": ["venom"],
+		"connections": ["tyranthos"],
 	},
 	{
-		"id": "sector_z", "name": "SECTOR Z", "subtitle": "Ambush Zone",
+		"id": "rift_omega", "name": "RIFT OMEGA", "subtitle": "Ambush Zone",
 		"row": 4, "col": 4, "color": Color(0.8, 0.2, 0.2),
-		"connections": ["venom"],
+		"connections": ["tyranthos"],
 	},
 	{
-		"id": "venom", "name": "VENOM", "subtitle": "Final Assault",
+		"id": "tyranthos", "name": "TYRANTHOS", "subtitle": "Final Assault",
 		"row": 5, "col": 2, "color": Color(0.9, 0.15, 0.1),
 		"connections": [],
 	},
@@ -145,8 +145,8 @@ func _determine_selectable():
 	selectable_ids.clear()
 
 	# Start node is always selectable
-	if not GameManager.is_level_beaten("corneria"):
-		selectable_ids = ["corneria"]
+	if not GameManager.is_level_beaten("aethon"):
+		selectable_ids = ["aethon"]
 		selected_index = 0
 		return
 
@@ -167,7 +167,7 @@ func _determine_selectable():
 
 	if selectable_ids.is_empty():
 		# All beaten — allow replaying venom or show victory
-		selectable_ids = ["venom"]
+		selectable_ids = ["tyranthos"]
 
 	selected_index = 0
 
