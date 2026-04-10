@@ -835,12 +835,12 @@ func _update_engine_lights():
 			var alpha: float = 1.0 - (age / trail_fade_time)
 			alpha = clampf(alpha, 0.0, 1.0)
 
-			# Color: white-hot near ship, blue as it fades
+			# Color: bright white-blue near ship, fading out
 			var col := Color(
-				lerpf(0.3, 0.9, alpha),
 				lerpf(0.5, 0.95, alpha),
+				lerpf(0.7, 0.97, alpha),
 				1.0,
-				alpha * 0.6
+				alpha * 0.8
 			)
 
 			var p: Vector3 = pt["pos"]
