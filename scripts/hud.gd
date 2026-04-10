@@ -5,6 +5,7 @@ extends Control
 
 var health_bar: ProgressBar
 var boost_bar: ProgressBar
+var laser_bar: ProgressBar
 var missile_label: Label
 var score_label: Label
 var hits_label: Label
@@ -30,6 +31,7 @@ func _ready():
 	_build_speed_lines_layer()
 	_build_health_bar()
 	_build_boost_bar()
+	_build_laser_bar()
 	_build_missile_counter()
 	_build_hits_counter()
 	_build_lives_display()
@@ -59,6 +61,8 @@ func _connect_player():
 		p.health_changed.connect(_on_health)
 	if p.has_signal("boost_changed"):
 		p.boost_changed.connect(_on_boost)
+	if p.has_signal("laser_energy_changed"):
+		p.laser_energy_changed.connect(_on_laser_energy)
 	if p.has_signal("missiles_changed"):
 		p.missiles_changed.connect(_on_missiles)
 	if p.has_signal("score_changed"):
@@ -327,6 +331,39 @@ func _build_boost_bar():
 	box.add_child(boost_bar)
 
 
+# ── Laser Energy Bar ─────────────────────────────────────────
+
+func _build_laser_bar():
+	var box := VBoxContainer.new()
+	box.position = Vector2(20, 110)
+	box.custom_minimum_size = Vector2(200, 0)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(box)
+
+	var lbl := Label.new()
+	lbl.text = "LASER"
+	lbl.add_theme_font_size_override("font_size", 14)
+	lbl.add_theme_color_override("font_color", Color(0.3, 0.9, 1.0))
+	box.add_child(lbl)
+
+	laser_bar = ProgressBar.new()
+	laser_bar.custom_minimum_size = Vector2(200, 12)
+	laser_bar.max_value = 100.0
+	laser_bar.value = 100.0
+	laser_bar.show_percentage = false
+
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0.1, 0.1, 0.2, 0.8)
+	bg.border_color = Color(0.3, 0.9, 1.0, 0.5)
+	bg.set_border_width_all(1)
+	laser_bar.add_theme_stylebox_override("background", bg)
+
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = Color(0.3, 0.85, 1.0)
+	laser_bar.add_theme_stylebox_override("fill", fill)
+	box.add_child(laser_bar)
+
+
 # ── Missile Counter ───────────────────────────────────────────
 
 func _build_missile_counter():
@@ -466,6 +503,19 @@ func _on_boost(val: float, val_max: float):
 	if boost_bar:
 		boost_bar.max_value = val_max
 		boost_bar.value = val
+
+
+func _on_laser_energy(val: float, val_max: float):
+	if laser_bar:
+		laser_bar.max_value = val_max
+		laser_bar.value = val
+		var fill := laser_bar.get_theme_stylebox("fill") as StyleBoxFlat
+		if fill:
+			var ratio := val / val_max
+			if ratio > 0.3:
+				fill.bg_color = Color(0.3, 0.85, 1.0)
+			else:
+				fill.bg_color = Color(1.0, 0.3, 0.2)
 
 
 func _on_missiles(count: int):

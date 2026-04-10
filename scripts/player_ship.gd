@@ -28,6 +28,11 @@ var fire_timer: float = 0.0
 var double_shot: bool = false
 var double_shot_timer: float = 0.0
 var double_shot_duration: float = 15.0
+var laser_energy: float = 100.0
+var max_laser_energy: float = 100.0
+var laser_drain_rate: float = 33.33    # depletes full bar in ~3 sec of continuous fire
+var laser_recharge_rate: float = 33.33 # recharges full bar in ~3 sec
+var laser_recharging: bool = false     # true when empty, blocks fire until partial refill
 
 # ── Boost / brake ──
 var boost_multiplier: float = 1.75
@@ -95,6 +100,7 @@ signal missiles_changed(count: int)
 signal score_changed(pts: int)
 signal hits_changed(count: int)
 signal lives_changed(count: int)
+signal laser_energy_changed(val: float, val_max: float)
 signal phase_changed(is_active: bool, cooldown_ratio: float)
 signal ship_destroyed
 
@@ -233,10 +239,24 @@ func _handle_snap_target():
 
 # ── Shooting (R2) ────────────────────────────────────────────
 
-func _handle_shooting(_delta):
-	if Input.is_action_pressed("shoot") and fire_timer <= 0:
+func _handle_shooting(delta):
+	var firing := Input.is_action_pressed("shoot") and fire_timer <= 0 and not laser_recharging and laser_energy > 0
+
+	if firing:
 		_fire_laser()
 		fire_timer = fire_rate
+		laser_energy = maxf(laser_energy - laser_drain_rate * fire_rate, 0.0)
+		if laser_energy <= 0:
+			laser_recharging = true
+		laser_energy_changed.emit(laser_energy, max_laser_energy)
+	else:
+		# Recharge when not firing
+		if laser_energy < max_laser_energy:
+			laser_energy = minf(laser_energy + laser_recharge_rate * delta, max_laser_energy)
+			# Allow firing again once recharged past 25%
+			if laser_recharging and laser_energy >= max_laser_energy * 0.25:
+				laser_recharging = false
+			laser_energy_changed.emit(laser_energy, max_laser_energy)
 
 
 func _fire_laser():
