@@ -36,10 +36,7 @@ func _process(delta):
 		ship.position.y = base_pos.y + sin(_time * 1.2 + phase) * 0.15
 		ship.rotation.z = sin(_time * 0.8 + phase * 1.3) * deg_to_rad(3.0)
 
-	if not _started:
-		if Input.is_action_just_pressed("shoot") or Input.is_action_just_pressed("ui_select") or Input.is_action_just_pressed("boost"):
-			_started = true
-			get_tree().change_scene_to_file("res://scenes/solar_map.tscn")
+	# Menu input handled by buttons + focus system
 
 
 func _build_environment():
@@ -242,26 +239,106 @@ func _build_ui():
 	subtitle.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui.add_child(subtitle)
 
-	# ── Press Start prompt ──
-	var prompt := Label.new()
-	prompt.text = "P R E S S   S T A R T"
-	prompt.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	prompt.offset_bottom = -50
+	# ── Menu buttons ──
+	var menu_container := VBoxContainer.new()
+	menu_container.set_anchors_preset(Control.PRESET_CENTER)
+	menu_container.offset_left = -140
+	menu_container.offset_right = 140
+	menu_container.offset_top = 80
+	menu_container.offset_bottom = 220
+	menu_container.add_theme_constant_override("separation", 12)
+	menu_container.alignment = BoxContainer.ALIGNMENT_CENTER
+	ui.add_child(menu_container)
 
-	var prompt_settings := LabelSettings.new()
-	prompt_settings.font_size = 22
-	prompt_settings.font_color = Color(1.0, 0.85, 0.2)
-	prompt_settings.outline_size = 2
-	prompt_settings.outline_color = Color(0.5, 0.3, 0.0)
-	prompt_settings.shadow_size = 6
-	prompt_settings.shadow_color = Color(0.4, 0.25, 0.0, 0.4)
-	prompt_settings.shadow_offset = Vector2(0, 3)
-	prompt.label_settings = prompt_settings
+	var buttons := ["S T A R T", "O P T I O N S", "E X I T"]
+	var actions := [_on_start, _on_options, _on_exit]
 
-	prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	prompt.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui.add_child(prompt)
+	for i in buttons.size():
+		var btn := Button.new()
+		btn.text = buttons[i]
+		btn.custom_minimum_size = Vector2(280, 50)
+		btn.focus_mode = Control.FOCUS_ALL
 
-	var tween := create_tween().set_loops()
-	tween.tween_property(prompt, "modulate:a", 0.3, 0.8).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	tween.tween_property(prompt, "modulate:a", 1.0, 0.8).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+		# Flat transparent style
+		var normal_style := StyleBoxFlat.new()
+		normal_style.bg_color = Color(0.05, 0.1, 0.2, 0.6)
+		normal_style.border_color = Color(0.2, 0.45, 0.8, 0.5)
+		normal_style.set_border_width_all(1)
+		normal_style.set_corner_radius_all(2)
+		normal_style.set_content_margin_all(8)
+		btn.add_theme_stylebox_override("normal", normal_style)
+
+		# Hover — brighter border, subtle blue fill
+		var hover_style := StyleBoxFlat.new()
+		hover_style.bg_color = Color(0.1, 0.2, 0.4, 0.8)
+		hover_style.border_color = Color(0.4, 0.7, 1.0, 0.9)
+		hover_style.set_border_width_all(2)
+		hover_style.set_corner_radius_all(2)
+		hover_style.set_content_margin_all(8)
+		btn.add_theme_stylebox_override("hover", hover_style)
+
+		# Focus — same as hover (for controller navigation)
+		var focus_style := hover_style.duplicate()
+		btn.add_theme_stylebox_override("focus", focus_style)
+
+		# Pressed
+		var pressed_style := StyleBoxFlat.new()
+		pressed_style.bg_color = Color(0.15, 0.3, 0.6, 0.9)
+		pressed_style.border_color = Color(0.5, 0.85, 1.0, 1.0)
+		pressed_style.set_border_width_all(2)
+		pressed_style.set_corner_radius_all(2)
+		pressed_style.set_content_margin_all(8)
+		btn.add_theme_stylebox_override("pressed", pressed_style)
+
+		btn.add_theme_font_size_override("font_size", 20)
+		btn.add_theme_color_override("font_color", Color(0.6, 0.75, 0.9))
+		btn.add_theme_color_override("font_hover_color", Color(0.9, 0.95, 1.0))
+		btn.add_theme_color_override("font_focus_color", Color(0.9, 0.95, 1.0))
+		btn.add_theme_color_override("font_pressed_color", Color(1.0, 1.0, 1.0))
+
+		btn.pressed.connect(actions[i])
+		btn.mouse_entered.connect(_on_btn_hover.bind(btn))
+		btn.focus_entered.connect(_on_btn_focus.bind(btn))
+		btn.focus_exited.connect(_on_btn_unfocus.bind(btn))
+
+		menu_container.add_child(btn)
+
+	# Give first button focus after layout settles
+	await get_tree().process_frame
+	menu_container.get_child(0).grab_focus()
+
+
+func _on_btn_hover(btn: Button):
+	btn.grab_focus()
+
+
+func _on_btn_focus(btn: Button):
+	# Slide in from left + scale up
+	var tween := create_tween()
+	tween.set_parallel(true)
+	btn.pivot_offset = btn.size / 2.0
+	tween.tween_property(btn, "scale", Vector2(1.06, 1.06), 0.15).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	tween.tween_property(btn, "position:x", btn.position.x + 6, 0.15).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+
+
+func _on_btn_unfocus(btn: Button):
+	var tween := create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(btn, "scale", Vector2(1.0, 1.0), 0.12).set_ease(Tween.EASE_OUT)
+	tween.tween_property(btn, "position:x", btn.position.x - 6, 0.12).set_ease(Tween.EASE_OUT)
+
+
+func _on_start():
+	if _started:
+		return
+	_started = true
+	GameManager.reset_campaign()
+	get_tree().change_scene_to_file("res://scenes/solar_map.tscn")
+
+
+func _on_options():
+	pass  # TODO: options menu
+
+
+func _on_exit():
+	get_tree().quit()
