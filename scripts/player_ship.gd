@@ -767,10 +767,26 @@ func _build_engine():
 
 	# Draw pass — small billboard quad per particle
 	var draw_mesh := QuadMesh.new()
-	draw_mesh.size = Vector2(0.25, 0.25)
+	draw_mesh.size = Vector2(0.3, 0.3)
 	engine_particles.draw_pass_1 = draw_mesh
 
-	# Draw material — additive blending, billboard, emissive
+	# Soft radial gradient texture — white center fading to transparent edges
+	var soft_dot := GradientTexture2D.new()
+	soft_dot.width = 64
+	soft_dot.height = 64
+	soft_dot.fill = GradientTexture2D.FILL_RADIAL
+	soft_dot.fill_from = Vector2(0.5, 0.5)
+	soft_dot.fill_to = Vector2(0.5, 0.0)
+	var dot_grad := Gradient.new()
+	dot_grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 1.0),
+		Color(1.0, 1.0, 1.0, 0.4),
+		Color(1.0, 1.0, 1.0, 0.0),
+	])
+	dot_grad.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
+	soft_dot.gradient = dot_grad
+
+	# Draw material — additive blending, billboard, soft texture
 	engine_draw_mat = StandardMaterial3D.new()
 	engine_draw_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	engine_draw_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
@@ -778,6 +794,7 @@ func _build_engine():
 	engine_draw_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	engine_draw_mat.vertex_color_use_as_albedo = true
 	engine_draw_mat.albedo_color = Color.WHITE
+	engine_draw_mat.albedo_texture = soft_dot
 	engine_draw_mat.no_depth_test = true
 	draw_mesh.material = engine_draw_mat
 
