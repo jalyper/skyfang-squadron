@@ -88,7 +88,8 @@ var ship_visual: Node3D
 var shoot_point: Marker3D
 
 # ── Engine lights ──
-var engine_lights: Array = []  # [{light, glow, glow_mat, trail}] per engine
+var engine_lights: Array = []  # [{light, glow, glow_mat, trail_mesh, trail_points}]
+var trail_fade_time: float = 0.5  # seconds before trail fully disappears
 
 # ── Signals ──
 signal health_changed(hp: float, hp_max: float)
@@ -733,17 +734,15 @@ func _build_visuals():
 
 
 func _build_engine_lights():
-	# Two engine glows at the rear wing-body junctions
-	# Positions estimated from the model's visual shape
 	var positions := [
-		Vector3(-0.55, 0.0, 0.45),  # left engine — snug against hull
+		Vector3(-0.55, 0.0, 0.45),  # left engine
 		Vector3(0.55, 0.0, 0.45),   # right engine
 	]
 	for pos in positions:
-		# Engine nozzle — tiny bright point light
+		# Engine nozzle glow
 		var glow := MeshInstance3D.new()
 		var glow_mesh := BoxMesh.new()
-		glow_mesh.size = Vector3(0.06, 0.04, 0.02)  # thin slit, not a sphere
+		glow_mesh.size = Vector3(0.06, 0.04, 0.02)
 		glow.mesh = glow_mesh
 		glow.position = pos
 		glow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -764,79 +763,41 @@ func _build_engine_lights():
 		light.omni_attenuation = 1.5
 		ship_visual.add_child(light)
 
-		# Plasma trail — tight beam of bright color, no texture dependency
-		var trail := GPUParticles3D.new()
-		trail.emitting = false
-		trail.amount = 25
-		trail.lifetime = 0.25
-		trail.explosiveness = 0.0
-		trail.randomness = 0.05
-		trail.fixed_fps = 60
-		trail.local_coords = false
-		trail.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		trail.position = pos
+		# Trail ribbon — ImmediateMesh drawn in world space
+		var trail_mi := MeshInstance3D.new()
+		trail_mi.mesh = ImmediateMesh.new()
+		trail_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var trail_mat := StandardMaterial3D.new()
+		trail_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		trail_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		trail_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		trail_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		trail_mat.vertex_color_use_as_albedo = true
+		trail_mat.no_depth_test = true
+		trail_mi.material_override = trail_mat
+		# Add to game world root so it's in world space, not ship-local
+		add_child(trail_mi)
 
-		var proc := ParticleProcessMaterial.new()
-		proc.direction = Vector3(0, 0, 1)
-		proc.spread = 1.5  # very tight — plasma beam, not smoke
-		proc.initial_velocity_min = 6.0
-		proc.initial_velocity_max = 8.0
-		proc.gravity = Vector3.ZERO
-		proc.damping_min = 3.0
-		proc.damping_max = 4.0
-		proc.scale_min = 0.4
-		proc.scale_max = 0.6
-
-		# Shrink over life
-		var sc_curve := CurveTexture.new()
-		var sc := Curve.new()
-		sc.add_point(Vector2(0.0, 1.0))
-		sc.add_point(Vector2(0.5, 0.6))
-		sc.add_point(Vector2(1.0, 0.1))
-		sc_curve.curve = sc
-		proc.scale_curve = sc_curve
-
-		# Color: white-hot core → bright blue → fade
-		var ramp := GradientTexture1D.new()
-		var grad := Gradient.new()
-		grad.colors = PackedColorArray([
-			Color(0.9, 0.95, 1.0, 0.8),
-			Color(0.3, 0.5, 1.0, 0.5),
-			Color(0.1, 0.3, 0.8, 0.0),
-		])
-		grad.offsets = PackedFloat32Array([0.0, 0.3, 1.0])
-		ramp.gradient = grad
-		proc.color_ramp = ramp
-
-		trail.process_material = proc
-
-		# Thin horizontal slit quad — reads as a beam slice, not a dot
-		var quad := QuadMesh.new()
-		quad.size = Vector2(0.1, 0.03)
-		trail.draw_pass_1 = quad
-
-		# Bright unshaded material — color baked in, no texture needed
-		var dmat := StandardMaterial3D.new()
-		dmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		dmat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-		dmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		dmat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-		dmat.vertex_color_use_as_albedo = true
-		dmat.albedo_color = Color(0.5, 0.7, 1.0)
-		dmat.no_depth_test = true
-		quad.material = dmat
-
-		ship_visual.add_child(trail)
-		engine_lights.append({"light": light, "glow": glow, "glow_mat": glow_mat, "trail": trail})
+		engine_lights.append({
+			"light": light, "glow": glow, "glow_mat": glow_mat,
+			"local_pos": pos, "trail_mesh": trail_mi,
+			"trail_points": [],  # [{pos: Vector3, time: float}]
+		})
 
 
 func _update_engine_lights():
 	var t := Time.get_ticks_msec() / 1000.0
+	var now := Time.get_ticks_msec() / 1000.0
 	var flicker := 0.95 + sin(t * 30.0) * 0.05
+	var half_width := 0.015  # ribbon half-thickness — very thin flat stroke
+
 	for entry in engine_lights:
 		var light: OmniLight3D = entry["light"]
 		var glow_mat: StandardMaterial3D = entry["glow_mat"]
-		var trail: GPUParticles3D = entry["trail"]
+		var trail_points: Array = entry["trail_points"]
+		var trail_mi: MeshInstance3D = entry["trail_mesh"]
+		var imesh: ImmediateMesh = trail_mi.mesh
+
 		if is_boosting:
 			light.light_color = Color(0.7, 0.85, 1.0)
 			light.light_energy = 6.0 * flicker
@@ -844,7 +805,11 @@ func _update_engine_lights():
 			glow_mat.albedo_color = Color(1.0, 1.0, 1.0)
 			glow_mat.emission = Color(0.95, 0.97, 1.0)
 			glow_mat.emission_energy_multiplier = 25.0 * flicker
-			trail.emitting = true
+
+			# Record current engine world position
+			var local_pos: Vector3 = entry["local_pos"]
+			var world_pos: Vector3 = ship_visual.global_transform * local_pos
+			trail_points.append({"pos": world_pos, "time": now})
 		else:
 			light.light_color = Color(0.4, 0.65, 1.0)
 			light.light_energy = 3.0 * flicker
@@ -852,7 +817,39 @@ func _update_engine_lights():
 			glow_mat.albedo_color = Color(0.85, 0.93, 1.0)
 			glow_mat.emission = Color(0.8, 0.9, 1.0)
 			glow_mat.emission_energy_multiplier = 15.0 * flicker
-			trail.emitting = false
+
+		# Expire old points
+		while trail_points.size() > 0 and (now - trail_points[0]["time"]) > trail_fade_time:
+			trail_points.pop_front()
+
+		# Rebuild ribbon mesh
+		imesh.clear_surfaces()
+		if trail_points.size() < 2:
+			continue
+
+		imesh.surface_begin(Mesh.PRIMITIVE_TRIANGLE_STRIP)
+		for i in trail_points.size():
+			var pt = trail_points[i]
+			var age: float = now - pt["time"]
+			var alpha: float = 1.0 - (age / trail_fade_time)
+			alpha = clampf(alpha, 0.0, 1.0)
+
+			# Color: white-hot near ship, blue as it fades
+			var col := Color(
+				lerpf(0.3, 0.9, alpha),
+				lerpf(0.5, 0.95, alpha),
+				1.0,
+				alpha * 0.6
+			)
+
+			var p: Vector3 = pt["pos"]
+			# Flat horizontal ribbon — offset on Y axis
+			imesh.surface_set_color(col)
+			imesh.surface_add_vertex(p + Vector3(0, half_width, 0))
+			imesh.surface_set_color(col)
+			imesh.surface_add_vertex(p + Vector3(0, -half_width, 0))
+
+		imesh.surface_end()
 
 
 func _build_collision():
