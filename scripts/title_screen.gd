@@ -131,8 +131,8 @@ func _build_ships():
 		if ShipModel:
 			var model := ShipModel.instantiate()
 			model.scale = Vector3(1.2, 1.2, 1.2)
-			# Ships face TOWARD camera (-Z), same as in-game but flipped
-			model.rotation_degrees.y = 90
+			# Ships face TOWARD camera (-Z)
+			model.rotation_degrees.y = -90
 			ship.add_child(model)
 
 		add_child(ship)
