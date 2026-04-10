@@ -13,7 +13,7 @@ extends Area3D
 
 const LaserScript = preload("res://scripts/laser.gd")
 const TrackingMissileScript = preload("res://scripts/tracking_missile.gd")
-const ShipModel = preload("res://assets/models/ship.glb")
+const ShipModel = preload("res://assets/models/Meshy_AI_space_ship_starfox__0410213457_texture.glb")
 
 # ── Movement ──
 var move_speed: float = 15.0
