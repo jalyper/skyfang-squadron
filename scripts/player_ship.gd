@@ -88,11 +88,10 @@ var ship_visual: Node3D
 var shoot_point: Marker3D
 
 # ── Engine burn ──
-var engine_outer: MeshInstance3D   # outer soft cone
-var engine_inner: MeshInstance3D   # inner hot cone
-var engine_outer_mat: ShaderMaterial
-var engine_inner_mat: ShaderMaterial
-var engine_glow: MeshInstance3D    # nozzle core
+var engine_particles: GPUParticles3D
+var engine_particle_mat: ParticleProcessMaterial
+var engine_draw_mat: StandardMaterial3D
+var engine_glow: MeshInstance3D
 var engine_glow_mat: StandardMaterial3D
 var engine_light: OmniLight3D
 
@@ -716,76 +715,75 @@ func _die_explosion():
 
 
 # ── Engine Burn Effect ────────────────────────────────────────
-# Two nested cones with vertex-shader alpha: fully opaque at the nozzle
-# (bottom of cone), fading to transparent at the tip. The inner cone is
-# smaller and hotter (white-blue), the outer is larger and softer (blue).
-
-const ENGINE_SHADER_CODE = """
-shader_type spatial;
-render_mode blend_add, depth_draw_never, cull_disabled, unshaded;
-
-uniform vec4 base_color : source_color = vec4(0.3, 0.6, 1.0, 0.7);
-uniform float emission_strength : hint_range(0, 20) = 3.0;
-uniform float flicker = 1.0;
-
-void vertex() {
-	// VERTEX.y goes from -0.5 (bottom/nozzle) to +0.5 (tip)
-	// Map to alpha: 1.0 at nozzle, 0.0 at tip
-	float fade = 1.0 - smoothstep(-0.5, 0.5, VERTEX.y);
-	COLOR = vec4(base_color.rgb, base_color.a * fade * flicker);
-}
-
-void fragment() {
-	ALBEDO = COLOR.rgb * emission_strength * flicker;
-	ALPHA = COLOR.a;
-}
-"""
+# GPUParticles3D exhaust: particles stream backward from the nozzle,
+# fading from hot white-blue to transparent. Nozzle glow sphere + light.
 
 func _build_engine():
-	var shader := Shader.new()
-	shader.code = ENGINE_SHADER_CODE
+	# ── Particle emitter ──
+	engine_particles = GPUParticles3D.new()
+	engine_particles.amount = 40
+	engine_particles.lifetime = 0.4
+	engine_particles.explosiveness = 0.0
+	engine_particles.randomness = 0.2
+	engine_particles.fixed_fps = 60
+	engine_particles.local_coords = true
+	engine_particles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	engine_particles.position = Vector3(0, 0, 0.7)  # nozzle exit
 
-	# Outer cone — larger, softer blue glow
-	engine_outer = MeshInstance3D.new()
-	var outer_mesh := CylinderMesh.new()
-	outer_mesh.top_radius = 0.0
-	outer_mesh.bottom_radius = 0.35
-	outer_mesh.height = 1.4
-	outer_mesh.radial_segments = 16
-	engine_outer.mesh = outer_mesh
-	engine_outer.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	engine_outer.rotation_degrees.x = -90
-	engine_outer.position = Vector3(0, 0, 1.3)
+	# Process material — controls particle physics
+	engine_particle_mat = ParticleProcessMaterial.new()
+	engine_particle_mat.direction = Vector3(0, 0, 1)  # emit backward (+Z in local)
+	engine_particle_mat.spread = 5.0
+	engine_particle_mat.initial_velocity_min = 4.0
+	engine_particle_mat.initial_velocity_max = 6.0
+	engine_particle_mat.gravity = Vector3.ZERO
+	engine_particle_mat.damping_min = 1.0
+	engine_particle_mat.damping_max = 2.0
 
-	engine_outer_mat = ShaderMaterial.new()
-	engine_outer_mat.shader = shader
-	engine_outer_mat.set_shader_parameter("base_color", Color(0.3, 0.55, 1.0, 0.5))
-	engine_outer_mat.set_shader_parameter("emission_strength", 3.0)
-	engine_outer_mat.set_shader_parameter("flicker", 1.0)
-	engine_outer.material_override = engine_outer_mat
-	ship_visual.add_child(engine_outer)
+	# Scale: start small, shrink to nothing
+	engine_particle_mat.scale_min = 0.8
+	engine_particle_mat.scale_max = 1.2
+	var scale_curve := CurveTexture.new()
+	var sc := Curve.new()
+	sc.add_point(Vector2(0.0, 1.0))
+	sc.add_point(Vector2(0.4, 0.6))
+	sc.add_point(Vector2(1.0, 0.0))
+	scale_curve.curve = sc
+	engine_particle_mat.scale_curve = scale_curve
 
-	# Inner cone — smaller, hotter white-blue core
-	engine_inner = MeshInstance3D.new()
-	var inner_mesh := CylinderMesh.new()
-	inner_mesh.top_radius = 0.0
-	inner_mesh.bottom_radius = 0.15
-	inner_mesh.height = 1.0
-	inner_mesh.radial_segments = 12
-	engine_inner.mesh = inner_mesh
-	engine_inner.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	engine_inner.rotation_degrees.x = -90
-	engine_inner.position = Vector3(0, 0, 1.1)
+	# Color: hot white-blue at start → blue → transparent
+	var color_ramp := GradientTexture1D.new()
+	var grad := Gradient.new()
+	grad.colors = PackedColorArray([
+		Color(0.85, 0.92, 1.0, 0.9),   # bright white-blue at nozzle
+		Color(0.4, 0.6, 1.0, 0.6),     # blue mid-life
+		Color(0.2, 0.4, 0.9, 0.0),     # fade to transparent
+	])
+	grad.offsets = PackedFloat32Array([0.0, 0.4, 1.0])
+	color_ramp.gradient = grad
+	engine_particle_mat.color_ramp = color_ramp
 
-	engine_inner_mat = ShaderMaterial.new()
-	engine_inner_mat.shader = shader
-	engine_inner_mat.set_shader_parameter("base_color", Color(0.7, 0.85, 1.0, 0.9))
-	engine_inner_mat.set_shader_parameter("emission_strength", 6.0)
-	engine_inner_mat.set_shader_parameter("flicker", 1.0)
-	engine_inner.material_override = engine_inner_mat
-	ship_visual.add_child(engine_inner)
+	engine_particles.process_material = engine_particle_mat
 
-	# Core glow — bright sphere at the nozzle
+	# Draw pass — small billboard quad per particle
+	var draw_mesh := QuadMesh.new()
+	draw_mesh.size = Vector2(0.25, 0.25)
+	engine_particles.draw_pass_1 = draw_mesh
+
+	# Draw material — additive blending, billboard, emissive
+	engine_draw_mat = StandardMaterial3D.new()
+	engine_draw_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	engine_draw_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	engine_draw_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	engine_draw_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	engine_draw_mat.vertex_color_use_as_albedo = true
+	engine_draw_mat.albedo_color = Color.WHITE
+	engine_draw_mat.no_depth_test = true
+	draw_mesh.material = engine_draw_mat
+
+	ship_visual.add_child(engine_particles)
+
+	# ── Nozzle glow sphere ──
 	engine_glow = MeshInstance3D.new()
 	var glow_mesh := SphereMesh.new()
 	glow_mesh.radius = 0.2
@@ -795,7 +793,7 @@ func _build_engine():
 	engine_glow.position = Vector3(0, 0, 0.65)
 
 	engine_glow_mat = StandardMaterial3D.new()
-	engine_glow_mat.albedo_color = Color(0.8, 0.9, 1.0)
+	engine_glow_mat.albedo_color = Color(0.8, 0.9, 1.0, 0.9)
 	engine_glow_mat.emission_enabled = true
 	engine_glow_mat.emission = Color(0.7, 0.85, 1.0)
 	engine_glow_mat.emission_energy_multiplier = 6.0
@@ -803,7 +801,7 @@ func _build_engine():
 	engine_glow.material_override = engine_glow_mat
 	ship_visual.add_child(engine_glow)
 
-	# Point light behind ship
+	# ── Point light ──
 	engine_light = OmniLight3D.new()
 	engine_light.position = Vector3(0, 0, 1.0)
 	engine_light.light_color = Color(0.4, 0.6, 1.0)
@@ -813,26 +811,24 @@ func _build_engine():
 
 
 func _update_engine(_delta):
-	if engine_outer == null:
+	if engine_particles == null:
 		return
 
 	var t := Time.get_ticks_msec() / 1000.0
 	var flicker := 0.9 + sin(t * 25.0) * 0.08 + sin(t * 41.0) * 0.05
 
 	if is_boosting:
-		# Boost: bigger, hotter, brighter
-		engine_outer.scale = Vector3(1.8, 2.5, 1.8) * flicker
-		engine_outer_mat.set_shader_parameter("base_color", Color(0.4, 0.65, 1.0, 0.7))
-		engine_outer_mat.set_shader_parameter("emission_strength", 6.0)
-		engine_outer_mat.set_shader_parameter("flicker", flicker)
-
-		engine_inner.scale = Vector3(1.5, 2.2, 1.5) * flicker
-		engine_inner_mat.set_shader_parameter("base_color", Color(0.9, 0.95, 1.0, 0.95))
-		engine_inner_mat.set_shader_parameter("emission_strength", 12.0)
-		engine_inner_mat.set_shader_parameter("flicker", flicker)
+		# Boost: more particles, faster, bigger, brighter
+		engine_particles.amount = 80
+		engine_particles.lifetime = 0.5
+		engine_particle_mat.initial_velocity_min = 8.0
+		engine_particle_mat.initial_velocity_max = 12.0
+		engine_particle_mat.scale_min = 1.2
+		engine_particle_mat.scale_max = 1.8
+		engine_particle_mat.spread = 8.0
 
 		engine_glow.scale = Vector3(1.5, 1.5, 1.5)
-		engine_glow_mat.albedo_color = Color(1.0, 0.97, 0.95)
+		engine_glow_mat.albedo_color = Color(1.0, 0.97, 0.95, 1.0)
 		engine_glow_mat.emission = Color(1.0, 0.95, 0.85)
 		engine_glow_mat.emission_energy_multiplier = 14.0 * flicker
 
@@ -840,18 +836,16 @@ func _update_engine(_delta):
 		engine_light.light_color = Color(0.5, 0.7, 1.0)
 	else:
 		# Normal cruise
-		engine_outer.scale = Vector3(1.0, 1.0, 1.0) * flicker
-		engine_outer_mat.set_shader_parameter("base_color", Color(0.3, 0.55, 1.0, 0.5))
-		engine_outer_mat.set_shader_parameter("emission_strength", 3.0)
-		engine_outer_mat.set_shader_parameter("flicker", flicker)
-
-		engine_inner.scale = Vector3(1.0, 1.0, 1.0) * flicker
-		engine_inner_mat.set_shader_parameter("base_color", Color(0.7, 0.85, 1.0, 0.9))
-		engine_inner_mat.set_shader_parameter("emission_strength", 6.0)
-		engine_inner_mat.set_shader_parameter("flicker", flicker)
+		engine_particles.amount = 40
+		engine_particles.lifetime = 0.4
+		engine_particle_mat.initial_velocity_min = 4.0
+		engine_particle_mat.initial_velocity_max = 6.0
+		engine_particle_mat.scale_min = 0.8
+		engine_particle_mat.scale_max = 1.2
+		engine_particle_mat.spread = 5.0
 
 		engine_glow.scale = Vector3(1.0, 1.0, 1.0)
-		engine_glow_mat.albedo_color = Color(0.8, 0.9, 1.0)
+		engine_glow_mat.albedo_color = Color(0.8, 0.9, 1.0, 0.9)
 		engine_glow_mat.emission = Color(0.7, 0.85, 1.0)
 		engine_glow_mat.emission_energy_multiplier = 6.0 * flicker
 
