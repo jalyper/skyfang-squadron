@@ -10,6 +10,8 @@ const TurretScript = preload("res://scripts/turret.gd")
 const HudScript = preload("res://scripts/hud.gd")
 const SquadCommsScript = preload("res://scripts/squad_comms.gd")
 const PickupScript = preload("res://scripts/pickup.gd")
+const SkyscraperModel = preload("res://assets/models/Meshy_AI_massive_skyscraper_0411002834_texture.glb")
+const WreckModel = preload("res://assets/models/Meshy_AI_a_half_destroyed_star_0411002802_texture.glb")
 
 # Rail
 var rail_speed: float = 16.0
@@ -353,67 +355,100 @@ func _create_camera():
 	add_child(rail_camera)
 
 
-# ── Buildings (cityscape obstacles) ───────────────────────────
+# ── Buildings & obstacles ─────────────────────────────────────
+# "skyscraper" = textured skyscraper model, "wreck" = destroyed starship,
+# "box" = plain box (corridor walls, beams).
+# Format: [position, type, scale, rotation_y]
 
 func _create_buildings():
-	var building_data = [
-		# [position, size] — city outskirts (Z=-30 to -55)
-		[Vector3(15, 5, -35),  Vector3(6, 12, 6)],
-		[Vector3(-14, 8, -45), Vector3(8, 18, 8)],
-		[Vector3(18, 4, -55),  Vector3(5, 10, 5)],
+	var obstacles = [
+		# === ACT 1: City outskirts (Z=-30 to -55) ===
+		[Vector3(15, 0, -35),   "skyscraper", 18.0, 0.0],
+		[Vector3(-14, 0, -45),  "skyscraper", 25.0, 45.0],
+		[Vector3(18, 0, -55),   "skyscraper", 15.0, -30.0],
 
-		# City proper (Z=-60 to -95)
-		[Vector3(10, 6, -65),  Vector3(6, 14, 8)],
-		[Vector3(-10, 7, -70), Vector3(7, 16, 6)],
-		[Vector3(12, 5, -85),  Vector3(5, 12, 5)],
-		[Vector3(-12, 8, -90), Vector3(8, 18, 6)],
+		# === City proper (Z=-60 to -95) ===
+		[Vector3(10, 0, -65),   "skyscraper", 20.0, 10.0],
+		[Vector3(-10, 0, -70),  "skyscraper", 28.0, -20.0],
+		[Vector3(12, 0, -85),   "skyscraper", 16.0, 60.0],
+		[Vector3(-12, 0, -90),  "skyscraper", 24.0, -45.0],
+		# Crashed ship in the street
+		[Vector3(4, 1, -80),    "wreck", 6.0, 15.0],
 
-		# Narrow corridor walls (Z=-105 to -135) — must tilt to fit
-		# Walls are wide apart with tall height to create canyon feel
-		[Vector3(7, 8, -120),  Vector3(3, 18, 35)],
-		[Vector3(-7, 8, -120), Vector3(3, 18, 35)],
+		# === Narrow corridor walls (Z=-105 to -135) ===
+		[Vector3(7, 8, -120),   "box", Vector3(3, 18, 35), 0.0],
+		[Vector3(-7, 8, -120),  "box", Vector3(3, 18, 35), 0.0],
 
-		# Dense combat area (Z=-185 to -240)
-		[Vector3(14, 6, -185),  Vector3(6, 14, 8)],
-		[Vector3(-13, 7, -195), Vector3(7, 16, 6)],
-		[Vector3(10, 5, -210),  Vector3(5, 12, 10)],
-		[Vector3(-11, 8, -225), Vector3(8, 18, 8)],
-		[Vector3(16, 4, -235),  Vector3(4, 10, 4)],
-		[Vector3(-15, 6, -240), Vector3(6, 14, 6)],
+		# === ACT 2: Dense combat (Z=-185 to -240) ===
+		[Vector3(14, 0, -185),  "skyscraper", 20.0, 25.0],
+		[Vector3(-13, 0, -195), "skyscraper", 22.0, -15.0],
+		[Vector3(-5, 2, -205),  "wreck", 8.0, 40.0],
+		[Vector3(10, 0, -210),  "skyscraper", 17.0, -50.0],
+		[Vector3(-11, 0, -225), "skyscraper", 26.0, 30.0],
+		[Vector3(6, 3, -232),   "wreck", 5.0, -60.0],
+		[Vector3(16, 0, -235),  "skyscraper", 14.0, 0.0],
+		[Vector3(-15, 0, -240), "skyscraper", 19.0, 70.0],
 
-		# Transition zone (Z=-260 to -300)
-		[Vector3(12, 7, -265),  Vector3(5, 16, 5)],
-		[Vector3(-13, 5, -275), Vector3(6, 12, 6)],
-		[Vector3(8, 10, -290),  Vector3(4, 22, 4)],
+		# === Transition zone (Z=-260 to -300) ===
+		[Vector3(12, 0, -265),  "skyscraper", 22.0, -10.0],
+		[Vector3(-13, 0, -275), "skyscraper", 18.0, 35.0],
+		[Vector3(3, 4, -285),   "wreck", 10.0, 20.0],
+		[Vector3(8, 0, -290),   "skyscraper", 30.0, -40.0],
 
 		# === ACT 3: Trench dive (Z=-300 to -420) ===
-		# Trench walls — tall narrow canyon going down
-		[Vector3(6, -4, -330),  Vector3(3, 12, 40)],
-		[Vector3(-6, -4, -330), Vector3(3, 12, 40)],
-		# Overhanging structures in trench
-		[Vector3(4, 2, -350),   Vector3(8, 2, 4)],   # ceiling beam
-		[Vector3(-3, 3, -380),  Vector3(6, 2, 4)],   # ceiling beam
+		[Vector3(6, -4, -330),  "box", Vector3(3, 12, 40), 0.0],
+		[Vector3(-6, -4, -330), "box", Vector3(3, 12, 40), 0.0],
+		# Overhanging beams
+		[Vector3(4, 2, -350),   "box", Vector3(8, 2, 4), 0.0],
+		[Vector3(-3, 3, -380),  "box", Vector3(6, 2, 4), 0.0],
+		# Wrecks lodged in the trench
+		[Vector3(3, -3, -365),  "wreck", 4.0, 90.0],
+		[Vector3(-4, -2, -400), "wreck", 5.0, -70.0],
 		# Trench exit pillars
-		[Vector3(5, -2, -410),  Vector3(3, 8, 3)],
-		[Vector3(-5, -2, -415), Vector3(3, 8, 3)],
+		[Vector3(5, -2, -410),  "box", Vector3(3, 8, 3), 0.0],
+		[Vector3(-5, -2, -415), "box", Vector3(3, 8, 3), 0.0],
 
-		# === ACT 4: Open space ruins (Z=-430 to -580) ===
-		# Floating ruined structures
-		[Vector3(16, 3, -440),  Vector3(5, 8, 5)],
-		[Vector3(-14, 5, -460), Vector3(6, 10, 6)],
-		[Vector3(12, -2, -490), Vector3(4, 6, 8)],
-		[Vector3(-10, 4, -510), Vector3(7, 12, 5)],
-		[Vector3(18, 1, -530),  Vector3(5, 8, 5)],
-		[Vector3(-16, 6, -550), Vector3(6, 14, 6)],
-		[Vector3(8, 3, -570),   Vector3(4, 10, 4)],
-		[Vector3(-12, -1, -580), Vector3(5, 8, 6)],
+		# === ACT 4: Open space debris field (Z=-430 to -580) ===
+		[Vector3(14, 3, -440),  "wreck", 12.0, 30.0],
+		[Vector3(-12, 5, -460), "wreck", 15.0, -45.0],
+		[Vector3(8, -2, -490),  "wreck", 10.0, 60.0],
+		[Vector3(-16, 2, -510), "wreck", 18.0, -20.0],
+		[Vector3(18, 1, -530),  "wreck", 8.0, 110.0],
+		[Vector3(-10, 6, -550), "wreck", 14.0, -80.0],
+		[Vector3(6, 3, -570),   "wreck", 11.0, 45.0],
+		[Vector3(-14, -1, -580), "wreck", 16.0, -30.0],
 	]
 
-	for bd in building_data:
-		_spawn_building(bd[0], bd[1])
+	for obs in obstacles:
+		match obs[1]:
+			"skyscraper":
+				_spawn_model_obstacle(obs[0], SkyscraperModel, obs[2], obs[3])
+			"wreck":
+				_spawn_model_obstacle(obs[0], WreckModel, obs[2], obs[3])
+			"box":
+				_spawn_box_obstacle(obs[0], obs[2])
 
 
-func _spawn_building(pos: Vector3, size: Vector3):
+func _spawn_model_obstacle(pos: Vector3, model_scene: PackedScene, scl: float, rot_y: float):
+	var body := StaticBody3D.new()
+	body.position = pos
+
+	var model := model_scene.instantiate()
+	model.scale = Vector3(scl, scl, scl)
+	model.rotation_degrees.y = rot_y
+	body.add_child(model)
+
+	# Approximate collision box based on scaled model bounds
+	var col := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(scl * 0.6, scl * 1.2, scl * 0.6)
+	col.shape = shape
+	body.add_child(col)
+
+	hazards_container.add_child(body)
+
+
+func _spawn_box_obstacle(pos: Vector3, size: Vector3):
 	var building := StaticBody3D.new()
 	building.position = pos
 
@@ -422,13 +457,11 @@ func _spawn_building(pos: Vector3, size: Vector3):
 	mesh.size = size
 	mi.mesh = mesh
 
-	# Dark metallic buildings with slight colour variation
 	var mat := StandardMaterial3D.new()
 	var shade := randf_range(0.12, 0.22)
 	mat.albedo_color = Color(shade, shade, shade * 1.3)
 	mat.metallic = 0.6
 	mat.roughness = 0.5
-	# Subtle edge glow
 	mat.emission_enabled = true
 	mat.emission = Color(0.1, 0.15, 0.3)
 	mat.emission_energy_multiplier = 0.3
