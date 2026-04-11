@@ -409,8 +409,9 @@ func _create_buildings():
 		[Vector3(-5, -2, -415), "box", Vector3(3, 8, 3), 0.0],
 
 		# === ACT 4: Open space debris field (Z=-430 to -580) ===
-		[Vector3(14, 3, -440),  "wreck", 12.0, 30.0],
-		[Vector3(-12, 5, -460), "wreck", 15.0, -45.0],
+		# Massive wreck — fly through the cavity, collectible inside
+		[Vector3(0, 0, -440),   "megawreck", 45.0, 0.0],
+		[Vector3(-12, 5, -475), "wreck", 15.0, -45.0],
 		[Vector3(8, -2, -490),  "wreck", 10.0, 60.0],
 		[Vector3(-16, 2, -510), "wreck", 18.0, -20.0],
 		[Vector3(18, 1, -530),  "wreck", 8.0, 110.0],
@@ -425,6 +426,8 @@ func _create_buildings():
 				_spawn_model_obstacle(obs[0], SkyscraperModel, obs[2], obs[3])
 			"wreck":
 				_spawn_model_obstacle(obs[0], WreckModel, obs[2], obs[3])
+			"megawreck":
+				_spawn_megawreck(obs[0], obs[2], obs[3])
 			"box":
 				_spawn_box_obstacle(obs[0], obs[2])
 
@@ -446,6 +449,63 @@ func _spawn_model_obstacle(pos: Vector3, model_scene: PackedScene, scl: float, r
 	body.add_child(col)
 
 	hazards_container.add_child(body)
+
+
+func _spawn_megawreck(pos: Vector3, scl: float, rot_y: float):
+	# Massive destroyed starship — no collision on the center so the player
+	# can boost through the cavity. Collision rings around the outer hull only.
+	var container := Node3D.new()
+	container.position = pos
+
+	var model := WreckModel.instantiate()
+	model.scale = Vector3(scl, scl, scl)
+	model.rotation_degrees.y = rot_y
+	container.add_child(model)
+
+	# Outer hull collision — two walls on either side of the cavity
+	# The wreck model is ~1.9 wide at scale 1, so at 45x it's ~85 units wide.
+	# Leave a gap in the center (~15 units) for the player to fly through.
+	var half_width: float = scl * 0.45
+	var gap: float = 8.0  # clear space for the player
+	var wall_width: float = half_width - gap
+
+	# Left hull wall
+	var col_l := StaticBody3D.new()
+	col_l.position = Vector3(-(gap + wall_width / 2.0), 0, 0)
+	var shape_l := CollisionShape3D.new()
+	var box_l := BoxShape3D.new()
+	box_l.size = Vector3(wall_width, scl * 0.5, scl * 0.5)
+	shape_l.shape = box_l
+	col_l.add_child(shape_l)
+	container.add_child(col_l)
+
+	# Right hull wall
+	var col_r := StaticBody3D.new()
+	col_r.position = Vector3(gap + wall_width / 2.0, 0, 0)
+	var shape_r := CollisionShape3D.new()
+	var box_r := BoxShape3D.new()
+	box_r.size = Vector3(wall_width, scl * 0.5, scl * 0.5)
+	shape_r.shape = box_r
+	col_r.add_child(shape_r)
+	container.add_child(col_r)
+
+	# Collectible inside the cavity — double shot powerup
+	var pickup := Area3D.new()
+	pickup.set_script(PickupScript)
+	pickup.pickup_type = PickupScript.PickupType.DOUBLE_SHOT
+	pickup.position = Vector3(0, 0, 0)  # dead center of the wreck
+	pickup.lifetime = 999.0
+	container.add_child(pickup)
+
+	# Atmospheric light inside the cavity
+	var inner_light := OmniLight3D.new()
+	inner_light.position = Vector3(0, 0, 0)
+	inner_light.light_color = Color(0.3, 0.8, 0.4)
+	inner_light.light_energy = 4.0
+	inner_light.omni_range = 12.0
+	container.add_child(inner_light)
+
+	hazards_container.add_child(container)
 
 
 func _spawn_box_obstacle(pos: Vector3, size: Vector3):
