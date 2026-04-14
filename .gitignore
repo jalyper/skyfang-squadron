@@ -26,3 +26,6 @@ desktop.ini
 *.swp
 *.swo
 *~
+
+# Private dev notes
+SUMMARY.md
