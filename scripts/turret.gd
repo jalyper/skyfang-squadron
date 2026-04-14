@@ -22,11 +22,18 @@ func _process(delta):
 	if gw == null or gw.path_follow == null:
 		return
 
+	var player_z: float = gw.path_follow.global_position.z
 	var dist := global_position.distance_to(gw.path_follow.global_position)
 
+	# Only activate/fire when the player is approaching, not after passing
+	var player_past: bool = player_z < global_position.z - 5.0
+
 	if not is_active:
-		if dist < activation_dist:
+		if dist < activation_dist and not player_past:
 			is_active = true
+		return
+
+	if player_past:
 		return
 
 	# Aim at player

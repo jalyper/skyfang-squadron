@@ -279,13 +279,14 @@ func _create_path_visuals():
 		ring_node.material_override = mat
 		ring_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
-		ring_node.position = pos
 		# Orient ring to face along path direction
 		var next_pos: Vector3 = curve.sample_baked(minf(offset_dist + 1.0, total_len))
 		var forward := (next_pos - pos).normalized()
-		if forward.length() > 0.01:
-			ring_node.look_at(pos + forward, Vector3.UP)
 		add_child(ring_node)
+		if forward.length() > 0.01 and not forward.is_equal_approx(Vector3.UP) and not forward.is_equal_approx(-Vector3.UP):
+			ring_node.look_at_from_position(pos, pos + forward, Vector3.UP)
+		else:
+			ring_node.position = pos
 
 	# End-of-tunnel glow: bright light + emissive sphere at path end
 	var end_pos: Vector3 = curve.sample_baked(total_len)
@@ -444,16 +445,18 @@ func _spawn_model_obstacle(pos: Vector3, model_scene: PackedScene, scl: float, r
 	# Approximate collision box based on scaled model bounds
 	var col := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
-	shape.size = Vector3(scl * 0.6, scl * 1.2, scl * 0.6)
+	var half := Vector3(scl * 0.35, scl * 0.8, scl * 0.35) * 0.5
+	shape.size = half * 2.0
 	col.shape = shape
 	body.add_child(col)
 
 	hazards_container.add_child(body)
+	GameManager.obstacle_aabbs.append({"pos": pos, "half": half})
 
 
 func _spawn_megawreck(pos: Vector3, scl: float, rot_y: float):
-	# Massive destroyed starship — no collision on the center so the player
-	# can boost through the cavity. Collision rings around the outer hull only.
+	# Massive destroyed starship — only the outer hull has collision, leaving
+	# the central cavity clear for the player to fly through.
 	var container := Node3D.new()
 	container.position = pos
 
@@ -462,38 +465,43 @@ func _spawn_megawreck(pos: Vector3, scl: float, rot_y: float):
 	model.rotation_degrees.y = rot_y
 	container.add_child(model)
 
-	# Outer hull collision — two walls on either side of the cavity
-	# The wreck model is ~1.9 wide at scale 1, so at 45x it's ~85 units wide.
-	# Leave a gap in the center (~15 units) for the player to fly through.
+	# The wreck is ~1.9 wide at scale 1, so at 45x it's ~85 units wide.
+	# Leave a gap in the center (~16 units) for the player to fly through.
 	var half_width: float = scl * 0.45
-	var gap: float = 8.0  # clear space for the player
+	var gap: float = 8.0
 	var wall_width: float = half_width - gap
+	var wall_height: float = scl * 0.5
+	var wall_depth: float = scl * 0.5
 
 	# Left hull wall
-	var col_l := StaticBody3D.new()
-	col_l.position = Vector3(-(gap + wall_width / 2.0), 0, 0)
+	var l_pos := pos + Vector3(-(gap + wall_width / 2.0), 0, 0)
+	var body_l := StaticBody3D.new()
+	body_l.position = l_pos
 	var shape_l := CollisionShape3D.new()
 	var box_l := BoxShape3D.new()
-	box_l.size = Vector3(wall_width, scl * 0.5, scl * 0.5)
+	box_l.size = Vector3(wall_width, wall_height, wall_depth)
 	shape_l.shape = box_l
-	col_l.add_child(shape_l)
-	container.add_child(col_l)
+	body_l.add_child(shape_l)
+	container.add_child(body_l)
+	GameManager.obstacle_aabbs.append({"pos": l_pos, "half": Vector3(wall_width, wall_height, wall_depth) * 0.5})
 
 	# Right hull wall
-	var col_r := StaticBody3D.new()
-	col_r.position = Vector3(gap + wall_width / 2.0, 0, 0)
+	var r_pos := pos + Vector3(gap + wall_width / 2.0, 0, 0)
+	var body_r := StaticBody3D.new()
+	body_r.position = r_pos
 	var shape_r := CollisionShape3D.new()
 	var box_r := BoxShape3D.new()
-	box_r.size = Vector3(wall_width, scl * 0.5, scl * 0.5)
+	box_r.size = Vector3(wall_width, wall_height, wall_depth)
 	shape_r.shape = box_r
-	col_r.add_child(shape_r)
-	container.add_child(col_r)
+	body_r.add_child(shape_r)
+	container.add_child(body_r)
+	GameManager.obstacle_aabbs.append({"pos": r_pos, "half": Vector3(wall_width, wall_height, wall_depth) * 0.5})
 
 	# Collectible inside the cavity — double shot powerup
 	var pickup := Area3D.new()
 	pickup.set_script(PickupScript)
 	pickup.pickup_type = PickupScript.PickupType.DOUBLE_SHOT
-	pickup.position = Vector3(0, 0, 0)  # dead center of the wreck
+	pickup.position = Vector3(0, 0, 0)
 	pickup.lifetime = 999.0
 	container.add_child(pickup)
 
@@ -535,6 +543,7 @@ func _spawn_box_obstacle(pos: Vector3, size: Vector3):
 	building.add_child(col)
 
 	hazards_container.add_child(building)
+	GameManager.obstacle_aabbs.append({"pos": pos, "half": size * 0.5})
 
 
 # ── Phase Walls (must phase through) ─────────────────────────
@@ -627,21 +636,13 @@ func _create_enemies():
 	# Turrets on buildings and structures
 	for pos in [
 		# Act 1: City turrets
-		Vector3(10, 14, -65),
 		Vector3(-10, 16, -70),
-		Vector3(12, 12, -85),
 		# Act 2: Combat zone turrets
-		Vector3(-7, 14, -210),
 		Vector3(10, 12, -210),
-		Vector3(14, 12, -235),
 		# Act 3: Trench turrets (on walls)
-		Vector3(5, 2, -340),
 		Vector3(-5, 1, -365),
-		Vector3(4, 3, -400),
 		# Act 4: Ruin turrets
-		Vector3(-14, 11, -460),
 		Vector3(12, 4, -490),
-		Vector3(-10, 10, -530),
 	]:
 		var turret = Area3D.new()
 		turret.set_script(TurretScript)
@@ -651,18 +652,14 @@ func _create_enemies():
 	# Fighter waves
 	var waves = [
 		# Act 1: City
-		[Vector3(0, 2, -55), 3],
-		[Vector3(0, 2, -140), 3],
-		[Vector3(0, 3, -200), 4],
-		[Vector3(0, 2, -260), 3],
+		[Vector3(0, 2, -55), 2],
+		[Vector3(0, 2, -140), 2],
+		[Vector3(0, 2, -260), 2],
 		# Act 3: Trench ambush
-		[Vector3(0, -5, -335), 2],
-		[Vector3(0, -6, -370), 3],
+		[Vector3(0, -6, -370), 2],
 		# Act 4: Asteroid field fighters
-		[Vector3(0, 2, -450), 4],
-		[Vector3(0, 0, -500), 3],
-		[Vector3(0, 1, -550), 5],  # big final wave
-		[Vector3(0, 0, -580), 3],
+		[Vector3(0, 2, -450), 2],
+		[Vector3(0, 1, -550), 3],  # final wave
 	]
 	for wave in waves:
 		var center: Vector3 = wave[0]

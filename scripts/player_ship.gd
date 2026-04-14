@@ -117,6 +117,7 @@ func _ready():
 func _process(delta):
 	if is_dead:
 		return
+	_check_obstacle_collision()
 	_handle_movement(delta)
 	_handle_snap_target()
 	_handle_shooting(delta)
@@ -549,6 +550,20 @@ func _fire_tracking_missiles():
 
 
 # ── Damage ────────────────────────────────────────────────────
+
+func _check_obstacle_collision():
+	if is_phasing or invuln_timer > 0 or is_dead:
+		return
+	var p := global_position
+	# Player half-extents (matches collision shape: 1.2 x 0.4 x 1.5)
+	var ph := Vector3(0.6, 0.2, 0.75)
+	for obs in GameManager.obstacle_aabbs:
+		var o: Vector3 = obs["pos"]
+		var h: Vector3 = obs["half"]
+		if absf(p.x - o.x) < (ph.x + h.x) and absf(p.y - o.y) < (ph.y + h.y) and absf(p.z - o.z) < (ph.z + h.z):
+			_die_explosion()
+			return
+
 
 func _on_area_entered(area: Area3D):
 	if is_phasing:

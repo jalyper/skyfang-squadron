@@ -4,6 +4,7 @@ extends Node
 var game_world: Node3D = null
 var player: Area3D = null
 var projectiles_container: Node3D = null
+var obstacle_aabbs: Array = []  # [{pos: Vector3, half: Vector3}] for manual collision
 
 # ── Persistent state across scenes (solar map progress) ──
 var current_level_id: String = ""

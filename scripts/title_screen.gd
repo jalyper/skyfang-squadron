@@ -3,8 +3,11 @@ extends Node3D
 ## streaking stars in the background, stylized title overlay.
 
 const ShipModel = preload("res://assets/models/Meshy_AI_space_ship_starfox__0410213457_texture.glb")
+const TitleLogoModel = preload("res://assets/models/Meshy_AI_SKYFANG_SQUADRON_st_0413213505_texture.glb")
 
 var ships: Array = []
+var title_logo: Node3D
+var _logo_base_y: float = 0.0
 var star_particles: GPUParticles3D
 var _time: float = 0.0
 var _started: bool = false
@@ -23,6 +26,7 @@ func _ready():
 	_build_environment()
 	_build_stars()
 	_build_ships()
+	_build_title_logo()
 	_build_camera()
 	_build_ui()
 
@@ -36,6 +40,10 @@ func _process(delta):
 		ship.position.y = base_pos.y + sin(_time * 1.2 + phase) * 0.15
 		ship.rotation.z = sin(_time * 0.8 + phase * 1.3) * deg_to_rad(3.0)
 
+	if title_logo:
+		title_logo.position.y = _logo_base_y + sin(_time * 1.0) * 0.2
+		title_logo.rotation.z = sin(_time * 0.6) * deg_to_rad(2.0)
+
 	# Menu input handled by buttons + focus system
 
 
@@ -46,8 +54,8 @@ func _build_environment():
 	env.ambient_light_color = Color(0.15, 0.15, 0.2)
 	env.ambient_light_energy = 0.3
 	env.glow_enabled = true
-	env.glow_intensity = 0.6
-	env.glow_bloom = 0.15
+	env.glow_intensity = 0.2
+	env.glow_bloom = 0.0
 
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env
@@ -136,6 +144,69 @@ func _build_ships():
 		ships.append(ship)
 
 
+func _build_title_logo():
+	if not TitleLogoModel:
+		return
+	title_logo = Node3D.new()
+	# Hovering above and slightly in front of the ship formation so it reads
+	# as the "title" in the upper portion of the camera view.
+	_logo_base_y = 3.8
+	title_logo.position = Vector3(0, _logo_base_y, 2.0)
+	title_logo.scale = Vector3(2.8, 2.8, 2.8)
+
+	var model := TitleLogoModel.instantiate()
+	model.rotation_degrees.y = 180
+	title_logo.add_child(model)
+
+	# The GLB ships with strong baked emission that bloomed into an
+	# unreadable haze. Crush the emission so real lights drive the look.
+	_tone_down_emission(model)
+
+	# Front-facing spot light to pop the logo against the dark background.
+	var front_light := SpotLight3D.new()
+	front_light.light_color = Color(1.0, 0.95, 1.0)
+	front_light.light_energy = 10.0
+	front_light.spot_range = 30.0
+	front_light.spot_angle = 45.0
+	front_light.spot_attenuation = 0.6
+	front_light.position = Vector3(0, 0, -4)
+	front_light.look_at_from_position(front_light.position, Vector3.ZERO, Vector3.UP)
+	title_logo.add_child(front_light)
+
+	# Warm fill from below for depth.
+	var fill_light := OmniLight3D.new()
+	fill_light.light_color = Color(1.0, 0.8, 0.6)
+	fill_light.light_energy = 2.5
+	fill_light.omni_range = 12.0
+	fill_light.position = Vector3(0, -1.5, -2)
+	title_logo.add_child(fill_light)
+
+	add_child(title_logo)
+
+
+func _tone_down_emission(node: Node) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		var mesh := mi.mesh
+		if mesh:
+			for i in mesh.get_surface_count():
+				var mat := mi.get_active_material(i)
+				if mat is StandardMaterial3D:
+					var sm := mat.duplicate() as StandardMaterial3D
+					sm.emission_enabled = true
+					sm.emission = Color(0.15, 0.15, 0.2)
+					sm.emission_energy_multiplier = 0.3
+					mi.set_surface_override_material(i, sm)
+				elif mat is ORMMaterial3D:
+					var om := mat.duplicate() as ORMMaterial3D
+					om.emission_enabled = true
+					om.emission = Color(0.15, 0.15, 0.2)
+					om.emission_energy_multiplier = 0.3
+					mi.set_surface_override_material(i, om)
+	for child in node.get_children():
+		_tone_down_emission(child)
+
+
 func _build_camera():
 	var cam := Camera3D.new()
 	# Camera in front of and slightly above the formation, looking back at them
@@ -155,65 +226,12 @@ func _build_ui():
 	ui.set_anchors_preset(Control.PRESET_FULL_RECT)
 	canvas.add_child(ui)
 
-	# ── Stylized title with glow layers ──
-
-	# Outer glow layer (large, blurred, colored)
-	var glow2 := Label.new()
-	glow2.text = "SKYFANG SQUADRON"
-	glow2.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	glow2.offset_top = 68
-	glow2.add_theme_font_size_override("font_size", 62)
-	glow2.add_theme_color_override("font_color", Color(0.1, 0.4, 1.0, 0.25))
-	glow2.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	glow2.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui.add_child(glow2)
-
-	# Mid glow layer
-	var glow1 := Label.new()
-	glow1.text = "SKYFANG SQUADRON"
-	glow1.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	glow1.offset_top = 72
-	glow1.add_theme_font_size_override("font_size", 56)
-	glow1.add_theme_color_override("font_color", Color(0.2, 0.6, 1.0, 0.4))
-	glow1.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	glow1.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui.add_child(glow1)
-
-	# Main title — bright with outline
-	var title := Label.new()
-	title.text = "SKYFANG SQUADRON"
-	title.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	title.offset_top = 76
-
-	var title_settings := LabelSettings.new()
-	title_settings.font_size = 52
-	title_settings.font_color = Color(0.85, 0.95, 1.0)
-	title_settings.outline_size = 4
-	title_settings.outline_color = Color(0.1, 0.3, 0.8)
-	title_settings.shadow_size = 8
-	title_settings.shadow_color = Color(0.0, 0.2, 0.7, 0.5)
-	title_settings.shadow_offset = Vector2(0, 4)
-	title.label_settings = title_settings
-
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui.add_child(title)
-
-	# Hot inner highlight — slightly smaller, brighter, offset up
-	var highlight := Label.new()
-	highlight.text = "SKYFANG SQUADRON"
-	highlight.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	highlight.offset_top = 75
-	highlight.add_theme_font_size_override("font_size", 52)
-	highlight.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.3))
-	highlight.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	highlight.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui.add_child(highlight)
+	# Title is now a 3D logo model built in _build_title_logo().
 
 	# ── Divider line ──
 	var line := ColorRect.new()
 	line.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	line.offset_top = 140
+	line.offset_top = 340
 	line.offset_left = 500
 	line.offset_right = -500
 	line.custom_minimum_size = Vector2(0, 2)
@@ -225,7 +243,7 @@ func _build_ui():
 	var subtitle := Label.new()
 	subtitle.text = "D E F E N D   T H E   S K I E S"
 	subtitle.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	subtitle.offset_top = 150
+	subtitle.offset_top = 350
 
 	var sub_settings := LabelSettings.new()
 	sub_settings.font_size = 16
@@ -244,14 +262,14 @@ func _build_ui():
 	menu_container.set_anchors_preset(Control.PRESET_CENTER)
 	menu_container.offset_left = -140
 	menu_container.offset_right = 140
-	menu_container.offset_top = 80
-	menu_container.offset_bottom = 220
+	menu_container.offset_top = 188
+	menu_container.offset_bottom = 328
 	menu_container.add_theme_constant_override("separation", 12)
 	menu_container.alignment = BoxContainer.ALIGNMENT_CENTER
 	ui.add_child(menu_container)
 
-	var buttons := ["S T A R T", "O P T I O N S", "E X I T"]
-	var actions := [_on_start, _on_options, _on_exit]
+	var buttons := ["S T A R T", "E X I T"]
+	var actions := [_on_start, _on_exit]
 
 	for i in buttons.size():
 		var btn := Button.new()
