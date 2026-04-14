@@ -2,7 +2,7 @@ extends Area3D
 ## Player laser projectile. Travels forward and damages enemies/hazards.
 ## If a target is set (locked enemy), the laser aggressively homes toward it.
 
-var speed: float = 70.0
+var speed: float = 140.0
 var lifetime: float = 3.0
 var damage: float = 25.0
 var direction: Vector3 = Vector3(0, 0, -1)
@@ -15,6 +15,15 @@ func _ready():
 	_build_mesh()
 	_build_collision()
 	area_entered.connect(_on_hit)
+	# Orient the whole laser node to face its travel direction so the
+	# visual bolt aligns with the actual trajectory.
+	if direction.length_squared() > 0.0001:
+		var target_point := global_position + direction
+		# Pick a stable up: world up unless direction is nearly vertical
+		var up := Vector3.UP
+		if absf(direction.dot(up)) > 0.99:
+			up = Vector3(0, 0, 1)
+		look_at(target_point, up)
 
 
 func _process(delta):
@@ -44,11 +53,11 @@ func _build_mesh():
 	# Main bolt — elongated tapered cylinder, bright cyan
 	var mi := MeshInstance3D.new()
 	var mesh := CylinderMesh.new()
-	mesh.top_radius = 0.03
-	mesh.bottom_radius = 0.06
-	mesh.height = 1.6
+	mesh.top_radius = 0.035
+	mesh.bottom_radius = 0.065
+	mesh.height = 4.5
 	mi.mesh = mesh
-	mi.rotation_degrees.x = 90
+	mi.rotation_degrees.x = -90
 
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.4, 0.9, 1.0)
@@ -61,11 +70,11 @@ func _build_mesh():
 	# Inner core glow — brighter white-cyan center
 	var core := MeshInstance3D.new()
 	var core_mesh := CylinderMesh.new()
-	core_mesh.top_radius = 0.015
+	core_mesh.top_radius = 0.018
 	core_mesh.bottom_radius = 0.035
-	core_mesh.height = 1.5
+	core_mesh.height = 4.3
 	core.mesh = core_mesh
-	core.rotation_degrees.x = 90
+	core.rotation_degrees.x = -90
 
 	var core_mat := StandardMaterial3D.new()
 	core_mat.albedo_color = Color(0.8, 0.95, 1.0)

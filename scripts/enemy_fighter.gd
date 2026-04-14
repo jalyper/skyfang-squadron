@@ -12,6 +12,15 @@ var activation_dist: float = 70.0  # activates sooner
 var is_active: bool = false
 var pattern_time: float = 0.0
 var origin_pos: Vector3
+# When set, the fighter chases and fires at this node instead of the player.
+# Used for the escort section where chasers target Kiro, not Raze.
+var custom_target: Node3D = null
+# Escort chasers are parented to path_follow alongside the ally, so they
+# can track the ally's local position exactly (including Z along the rail).
+# When tracking_mode is true, movement uses the target's LOCAL position
+# plus tracking_offset and ignores the world-space activation check.
+var tracking_mode: bool = false
+var tracking_offset: Vector3 = Vector3.ZERO
 
 
 func _ready():
@@ -26,6 +35,27 @@ func _process(delta):
 	if gw == null or gw.path_follow == null:
 		return
 
+	# Escort chaser path: parented to path_follow alongside the ally, so we
+	# track the target's LOCAL position plus a configured offset. This keeps
+	# chasers glued to the ally in all three axes regardless of rail motion.
+	if tracking_mode:
+		pattern_time += delta
+		if custom_target and is_instance_valid(custom_target):
+			var desired := custom_target.position + tracking_offset
+			# Add a gentle weave so they feel alive
+			desired += Vector3(
+				sin(pattern_time * 3.0 + origin_pos.x) * 0.8,
+				cos(pattern_time * 2.0 + origin_pos.y) * 0.5,
+				0,
+			)
+			position = position.lerp(desired, 3.0 * delta)
+
+			shoot_timer -= delta
+			if shoot_timer <= 0 and global_position.distance_to(custom_target.global_position) < 50.0:
+				_fire()
+				shoot_timer = randf_range(shoot_interval * 0.7, shoot_interval * 1.3)
+		return
+
 	var dist := global_position.distance_to(gw.path_follow.global_position)
 
 	if not is_active:
@@ -33,25 +63,24 @@ func _process(delta):
 			is_active = true
 		return
 
-	var player = GameManager.player
+	var focus := _get_focus()
 	pattern_time += delta
 
-	# Smart movement: strafe toward player's lateral position, weave unpredictably
-	if player and is_instance_valid(player):
-		var player_x: float = player.global_position.x
-		var player_y: float = player.global_position.y
-		# Drift toward player's lane but weave around it
-		var target_x := player_x + sin(pattern_time * 3.0 + origin_pos.x) * 5.0
-		var target_y := player_y + cos(pattern_time * 2.0 + origin_pos.y) * 3.0
+	# Smart movement: strafe toward focus target's world position, weave
+	if focus and is_instance_valid(focus):
+		var fx: float = focus.global_position.x
+		var fy: float = focus.global_position.y
+		var target_x := fx + sin(pattern_time * 3.0 + origin_pos.x) * 5.0
+		var target_y := fy + cos(pattern_time * 2.0 + origin_pos.y) * 3.0
 		position.x = lerpf(position.x, target_x, 1.5 * delta)
 		position.y = lerpf(position.y, target_y, 1.5 * delta)
 	else:
 		position.x = origin_pos.x + sin(pattern_time * 2.0) * 3.0
 		position.y = origin_pos.y + cos(pattern_time * 1.5) * 1.5
 
-	# Shoot — lead the target slightly
+	# Shoot — lead the focus target
 	shoot_timer -= delta
-	if shoot_timer <= 0 and dist < 50.0:
+	if shoot_timer <= 0 and focus and is_instance_valid(focus) and global_position.distance_to(focus.global_position) < 50.0:
 		_fire()
 		shoot_timer = randf_range(shoot_interval * 0.7, shoot_interval * 1.3)
 
@@ -129,13 +158,19 @@ func _explode_and_chain():
 	queue_free()
 
 
+func _get_focus() -> Node3D:
+	if custom_target != null and is_instance_valid(custom_target):
+		return custom_target
+	return GameManager.player
+
+
 func _fire():
-	# 3-shot burst with slight spread
-	var player = GameManager.player
-	if player == null or GameManager.projectiles_container == null:
+	# 3-shot burst with slight spread, aimed at the current focus target
+	var focus := _get_focus()
+	if focus == null or not is_instance_valid(focus) or GameManager.projectiles_container == null:
 		return
 
-	var base_dir: Vector3 = (player.global_position - global_position).normalized()
+	var base_dir: Vector3 = (focus.global_position - global_position).normalized()
 	for i in 3:
 		var bullet := Area3D.new()
 		bullet.set_script(TurretBulletScript)

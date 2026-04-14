@@ -16,14 +16,36 @@ const TrackingMissileScript = preload("res://scripts/tracking_missile.gd")
 const ShipModel = preload("res://assets/models/Meshy_AI_space_ship_starfox__0410213457_texture.glb")
 
 # ── Movement ──
-var move_speed: float = 15.0
-var move_bounds: Vector2 = Vector2(12.0, 8.0)
+var move_speed: float = 9.0
+var move_bounds: Vector2 = Vector2(12.0, 5.0)
 var bank_angle: float = 25.0
 var bank_lerp: float = 6.0
+
+# ── Gimbal aim (ship rotates to face joystick / locked target) ──
+var aim_yaw_limit_deg: float = 20.0
+var aim_pitch_limit_deg: float = 45.0
+var aim_lerp: float = 18.0
+
+# ── Right-stick reticle ──
+# Right stick drives a virtual reticle in path-local space sitting at a
+# fixed distance ahead of the ship. Lasers fire toward the reticle's
+# world position; the HUD crosshair reads it and projects to the screen.
+var reticle_offset: Vector2 = Vector2.ZERO
+var reticle_offset_max: Vector2 = Vector2(18.0, 10.0)
+var reticle_distance: float = 35.0
+var reticle_move_speed: float = 26.0   # peak speed once the ramp completes
+var reticle_accel_time: float = 0.0    # how long the stick has been held
+var reticle_accel_ramp: float = 0.0    # seconds from start to peak speed (0 = instant)
+var reticle_recenter_speed: float = 55.0  # drift-to-center when stick idle
+# Short delay before drift kicks in, so briefly crossing zero while the
+# player is changing aim direction doesn't snap the reticle toward center.
+var reticle_idle_time: float = 0.0
+var reticle_idle_threshold: float = 0.15
 
 # ── Shooting ──
 var fire_rate: float = 0.1
 var fire_timer: float = 0.0
+var total_shots_fired: int = 0
 var double_shot: bool = false
 var double_shot_timer: float = 0.0
 var double_shot_duration: float = 15.0
@@ -39,10 +61,14 @@ var brake_multiplier: float = 0.5
 var boost_energy: float = 100.0
 var max_boost_energy: float = 100.0
 var is_boosting: bool = false
+# Visual push-forward during boost (ship surges ahead of the rail, eases back)
+var boost_visual_offset: float = 0.0
+var boost_visual_target: float = -4.5
+var boost_visual_lerp: float = 3.5
 
 # ── Tilt (R1 / L1) + Barrel Roll (double-tap) ──
 var tilt_current: float = 0.0
-var tilt_speed: float = 8.0
+var tilt_speed: float = 18.0
 var barrel_rolling: bool = false
 var barrel_roll_timer: float = 0.0
 var barrel_roll_duration: float = 0.4
@@ -107,9 +133,11 @@ func _ready():
 	add_to_group("player")
 	_build_visuals()
 	_build_collision()
+	# shoot_point is parented to ship_visual so it rotates with the gimbal
+	# and lasers fire from the ship's actual facing, not the rail direction.
 	shoot_point = Marker3D.new()
-	shoot_point.position = Vector3(0, 0, -1.5)
-	add_child(shoot_point)
+	shoot_point.position = Vector3(0, 0, -2.5)
+	ship_visual.add_child(shoot_point)
 	area_entered.connect(_on_area_entered)
 	body_entered.connect(_on_body_entered)
 
@@ -154,15 +182,72 @@ func _handle_movement(delta):
 	position.x = clampf(position.x, -move_bounds.x, move_bounds.x)
 	position.y = clampf(position.y, -move_bounds.y, move_bounds.y)
 
-	# Wing dip — bank toward strafe direction
-	var strafe_bank := -input.x * deg_to_rad(bank_angle)
-	var pitch_adj := input.y * deg_to_rad(10.0)
+	# Right stick integrates into the reticle offset. Drift-to-center only
+	# kicks in once the stick is effectively at rest. Action deadzones are
+	# set to 0 in game_manager so we get raw values; we use a tiny 0.05
+	# threshold here to ignore hardware drift (Xbox sticks typically idle
+	# around 0.01-0.02) while still responding to any intentional tilt.
+	var aim_input := Input.get_vector("aim_left", "aim_right", "aim_up", "aim_down", 0.0)
+	if aim_input.length() > 0.05:
+		reticle_accel_time += delta
+		reticle_idle_time = 0.0
+		var ramp: float = 1.0
+		if reticle_accel_ramp > 0.0:
+			ramp = clampf(reticle_accel_time / reticle_accel_ramp, 0.0, 1.0)
+		var current_speed: float = reticle_move_speed * ramp
+		# X range is ~1.8× the Y range, so scale X velocity so both axes
+		# take the same time to traverse from center to edge.
+		var x_scale: float = reticle_offset_max.x / reticle_offset_max.y
+		reticle_offset.x += aim_input.x * current_speed * x_scale * delta
+		reticle_offset.y -= aim_input.y * current_speed * delta
+	else:
+		reticle_accel_time = 0.0
+		# Delay the drift: brief zero-crossings while the player swings the
+		# stick from one direction to another won't trigger recentering.
+		reticle_idle_time += delta
+		if reticle_idle_time >= reticle_idle_threshold:
+			reticle_offset = reticle_offset.move_toward(Vector2.ZERO, reticle_recenter_speed * delta)
+	reticle_offset.x = clampf(reticle_offset.x, -reticle_offset_max.x, reticle_offset_max.x)
+	reticle_offset.y = clampf(reticle_offset.y, -reticle_offset_max.y, reticle_offset_max.y)
 
-	# Combine tilt + strafe banking
+	# Wing dip from strafe (left stick) — bank only, no nose rotation.
+	var strafe_bank := -input.x * deg_to_rad(bank_angle)
+
+	# Ship's nose always tracks the reticle. When reticle drifts back to
+	# center, the nose follows it home with the same easing.
+	var aim_yaw := -(reticle_offset.x / reticle_offset_max.x) * deg_to_rad(aim_yaw_limit_deg)
+	var aim_pitch := (reticle_offset.y / reticle_offset_max.y) * deg_to_rad(aim_pitch_limit_deg)
+
+	# Combine tilt + strafe banking with aim. Pitch/yaw are set directly
+	# (reticle movement already provides the smoothing). Z keeps its lerp
+	# so wing-dip banking reads smoothly during strafe.
 	var target_z := tilt_current + strafe_bank
 	ship_visual.rotation.z = lerpf(ship_visual.rotation.z, target_z, bank_lerp * delta)
-	ship_visual.rotation.x = lerpf(ship_visual.rotation.x, pitch_adj, bank_lerp * delta)
-	ship_visual.rotation.y = lerpf(ship_visual.rotation.y, 0.0, bank_lerp * delta)
+	ship_visual.rotation.x = aim_pitch
+	ship_visual.rotation.y = aim_yaw
+
+
+func get_reticle_world_position() -> Vector3:
+	# Reticle is projected along the ship's actual forward direction so the
+	# HUD crosshair always sits exactly where a laser shot would travel.
+	# (Right stick drives the reticle_offset which drives the ship's nose
+	# rotation; here we read the resulting nose forward and project out.)
+	var forward: Vector3 = -ship_visual.global_transform.basis.z
+	if forward.length_squared() < 0.0001:
+		return shoot_point.global_position + Vector3(0, 0, -reticle_distance)
+	return shoot_point.global_position + forward.normalized() * reticle_distance
+
+
+func _nearest_locked_target() -> Node3D:
+	var nearest: Node3D = null
+	var nearest_dist := 9999.0
+	for t in locked_targets:
+		if is_instance_valid(t):
+			var d: float = global_position.distance_to(t.global_position)
+			if d < nearest_dist:
+				nearest_dist = d
+				nearest = t
+	return nearest
 
 
 # ── Snap to nearest enemy (Y) ─────────────────────────────────
@@ -233,38 +318,47 @@ func _handle_shooting(delta):
 func _fire_laser():
 	if GameManager.projectiles_container == null:
 		return
-	var forward: Vector3 = -get_parent().global_transform.basis.z
-	var right: Vector3 = get_parent().global_transform.basis.x
+	# Laser is physically locked to the ship: it fires in the ship's own
+	# forward direction (ship_visual -Z), from the shoot_point which is
+	# parented to ship_visual and positioned on the model's centerline.
+	# This guarantees the bolt always leaves straight out the nose no
+	# matter how the ship is rotated or rolled.
+	var forward: Vector3 = -ship_visual.global_transform.basis.z
+	if forward.length_squared() < 0.0001:
+		forward = Vector3(0, 0, -1)
+	forward = forward.normalized()
+	# Double-shot offsets use the ship's local right axis so the muzzles
+	# sit on the wings and roll with the ship.
+	var right: Vector3 = ship_visual.global_transform.basis.x.normalized()
+	if right.length_squared() < 0.0001:
+		right = Vector3(1, 0, 0)
+	total_shots_fired += 1
 
-	# Find nearest locked target for seeking
-	var seek_target: Node3D = null
-	if locked_targets.size() > 0:
-		var nearest_dist := 9999.0
-		for t in locked_targets:
-			if is_instance_valid(t):
-				var d: float = global_position.distance_to(t.global_position)
-				if d < nearest_dist:
-					nearest_dist = d
-					seek_target = t
-
+	# IMPORTANT: assign direction BEFORE add_child. The laser's _ready runs
+	# inside add_child and calls look_at based on direction — if we set
+	# direction afterward, the visual stays locked to the default -Z and
+	# every shot appears to fly along the rails.
 	if double_shot:
-		# Two parallel streams offset left and right
-		for offset in [-0.6, 0.6]:
+		for offset in [-0.32, 0.32]:
 			var laser := Area3D.new()
 			laser.set_script(LaserScript)
+			laser.direction = forward
 			GameManager.projectiles_container.add_child(laser)
 			laser.global_position = shoot_point.global_position + right * offset
-			laser.direction = forward
-			if seek_target:
-				laser.target = seek_target
+			laser.look_at(laser.global_position + forward, _safe_up(forward))
 	else:
 		var laser := Area3D.new()
 		laser.set_script(LaserScript)
+		laser.direction = forward
 		GameManager.projectiles_container.add_child(laser)
 		laser.global_position = shoot_point.global_position
-		laser.direction = forward
-		if seek_target:
-			laser.target = seek_target
+		laser.look_at(laser.global_position + forward, _safe_up(forward))
+
+
+func _safe_up(dir: Vector3) -> Vector3:
+	if absf(dir.dot(Vector3.UP)) > 0.99:
+		return Vector3(0, 0, 1)
+	return Vector3.UP
 
 
 func activate_double_shot():
@@ -295,6 +389,12 @@ func _handle_boost_brake(delta):
 		boost_energy = minf(boost_energy + 15.0 * delta, max_boost_energy)
 		is_boosting = false
 	boost_changed.emit(boost_energy, max_boost_energy)
+
+	# Visual surge: push ship_visual forward along its own -Z when boosting,
+	# ease back to 0 when the boost ends.
+	var target_offset: float = boost_visual_target if is_boosting else 0.0
+	boost_visual_offset = lerpf(boost_visual_offset, target_offset, boost_visual_lerp * delta)
+	ship_visual.position.z = boost_visual_offset
 
 
 # ── Tilt (R1 / L1) + Barrel Roll (double-tap) ────────────────
@@ -475,6 +575,14 @@ func _clear_material_overrides(node: Node):
 # ── Lock-on (enemies near screen center auto-lock) ───────────
 
 func _handle_lock_on(delta):
+	# Lock-on only runs while the player is actively holding the tracking
+	# missile button (X). Releasing clears the candidate and accumulator so
+	# the tutorial "HOLD X TO LOCK ON / RELEASE TO FIRE" matches reality.
+	if not Input.is_action_pressed("tracking_missile"):
+		lock_candidate = null
+		lock_timer = 0.0
+		return
+
 	# Clean up invalid candidate
 	if lock_candidate != null and not is_instance_valid(lock_candidate):
 		lock_candidate = null
@@ -524,8 +632,8 @@ func _handle_lock_on(delta):
 # ── Fire tracking missiles (X) ───────────────────────────────
 
 func _handle_missile_fire():
-	if Input.is_action_just_pressed("tracking_missile"):
-		print("X pressed — locks: ", locked_targets.size(), " missiles: ", missiles)
+	# Match the tutorial: hold X to build locks, release to fire them.
+	if Input.is_action_just_released("tracking_missile"):
 		if locked_targets.size() > 0 and missiles > 0:
 			_fire_tracking_missiles()
 

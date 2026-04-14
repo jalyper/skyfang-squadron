@@ -326,24 +326,36 @@ func _build_ui():
 	menu_container.get_child(0).grab_focus()
 
 
+func _input(event: InputEvent):
+	# Xbox A maps to JOY_BUTTON_A. The game's autoload remaps default UI
+	# actions, so Button.pressed doesn't fire on controller out of the box —
+	# forward the A button to whichever menu button currently has focus.
+	if event is InputEventJoypadButton and event.button_index == JOY_BUTTON_A and event.pressed:
+		var focused := get_viewport().gui_get_focus_owner()
+		if focused is Button:
+			# Mark handled BEFORE emitting — pressing Start changes the
+			# scene synchronously, which unparents this node and makes
+			# any post-emit viewport call null out.
+			get_viewport().set_input_as_handled()
+			focused.emit_signal("pressed")
+
+
 func _on_btn_hover(btn: Button):
 	btn.grab_focus()
 
 
 func _on_btn_focus(btn: Button):
-	# Slide in from left + scale up
-	var tween := create_tween()
-	tween.set_parallel(true)
+	# Symmetric scale-up around center — no lateral slide (it was drifting
+	# the button rightward asymmetrically).
 	btn.pivot_offset = btn.size / 2.0
+	var tween := create_tween()
 	tween.tween_property(btn, "scale", Vector2(1.06, 1.06), 0.15).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
-	tween.tween_property(btn, "position:x", btn.position.x + 6, 0.15).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
 
 
 func _on_btn_unfocus(btn: Button):
+	btn.pivot_offset = btn.size / 2.0
 	var tween := create_tween()
-	tween.set_parallel(true)
 	tween.tween_property(btn, "scale", Vector2(1.0, 1.0), 0.12).set_ease(Tween.EASE_OUT)
-	tween.tween_property(btn, "position:x", btn.position.x - 6, 0.12).set_ease(Tween.EASE_OUT)
 
 
 func _on_start():

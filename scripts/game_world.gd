@@ -48,24 +48,46 @@ var shockwave_zones: Array = [
 var comms_triggers: Array = []
 var comms_fired: Dictionary = {}
 
+# ── Tutorial State ──
+# Tutorials pause the game (rail slowdown) and show a prompt until the
+# player performs the taught action. One tutorial at a time.
+var tutorial_speed_mult: float = 1.0
+var tutorial_slow_factor: float = 0.05  # 5% rail speed while prompt is up
+var tutorial_panel: PanelContainer = null
+var tutorial_label: Label = null
+var tutorial_tween: Tween = null
+var tutorials: Array = []
+var tutorial_index: int = 0
+var active_tutorial: Dictionary = {}
+# Enemies tracked for the "enemies_cleared" tutorial trigger
+var tutorial_enemies: Array = []
+var tutorial_enemies_cleared: bool = false
+
 # ── Escort Section State ──
-# Kiro flies ahead of the player; a swarm of chasers stays in range and
-# deals DPS to him. Player must clear the chasers before the zone ends,
-# or Kiro dies and sits out the boss fight.
+# Kiro flies in from off-screen right, arcs across the player's view, and
+# holds a position ahead-center while chasers try to shred him. Player
+# clears the chasers; Kiro says thanks and peels off left.
 const AllyShipModel := preload("res://assets/models/Meshy_AI_space_ship_starfox__0410213457_texture.glb")
-var escort_start_ratio: float = 0.58
-var escort_end_ratio: float = 0.78
-var escort_triggered: bool = false
-var escort_active: bool = false
+enum EscortPhase { IDLE, ENTERING, HOLDING, EXITING, DONE }
+var escort_start_ratio: float = 0.55
+var escort_phase: int = EscortPhase.IDLE
+var escort_phase_time: float = 0.0
 var escort_complete: bool = false
-var escort_ally_pf: PathFollow3D = null
+var escort_help_shown: bool = false
+var escort_thanks_shown: bool = false
 var escort_ally: Node3D = null
 var escort_ally_hp: float = 100.0
 var escort_ally_max_hp: float = 100.0
 var escort_chasers: Array = []
-var escort_damage_range: float = 20.0
-var escort_dps_per_chaser: float = 6.0
-var escort_lead_distance: float = 35.0
+var escort_damage_range: float = 18.0
+var escort_dps_per_chaser: float = 5.0
+
+# Animation waypoints (all in path_follow-local space)
+var escort_entrance_duration: float = 3.5
+var escort_exit_duration: float = 2.5
+var escort_entry_start: Vector3 = Vector3(28.0, 3.0, -8.0)    # off-screen right
+var escort_entry_end: Vector3 = Vector3(0.0, 2.0, -42.0)      # settled ahead
+var escort_exit_end: Vector3 = Vector3(-32.0, 6.0, -95.0)     # off-screen left
 
 
 func _ready():
@@ -87,15 +109,17 @@ func _ready():
 	_create_pickups()
 	_create_ui()
 	_setup_comms_triggers()
+	_setup_tutorials()
 
 
 func _process(delta):
 	if level_complete or player_dead:
 		return
-	path_follow.progress += current_speed * delta
+	path_follow.progress += current_speed * tutorial_speed_mult * delta
 	if path_follow.progress_ratio >= 1.0:
 		level_complete = true
 		_on_level_complete()
+	_update_tutorials()
 	_check_comms_triggers()
 	_update_shockwave(delta)
 	_update_escort(delta)
@@ -611,11 +635,14 @@ func _create_phase_walls():
 # through. A head-on flat ship hits both plates.
 
 func _create_slot_gates():
-	# Slot gates along the slot-run straight (dist ~260-355)
+	# Gates are only placed on rail sections where the tilt is guaranteed
+	# zero at both neighboring control points — otherwise the Catmull-Rom
+	# tangent smoothing bleeds a slight roll into the straightaway and
+	# makes threading the gap much harder. Currently that's only the intro
+	# straight (P0→P1) and the final approach (P8→P10).
 	var gates := [
-		270,  # first slot (teach the mechanic)
-		300,  # second
-		335,  # third (tighter after practice)
+		60,   # intro straight — introduces the mechanic
+		700,  # final approach — skill check
 	]
 	for d in gates:
 		_spawn_slot_gate(float(d))
@@ -623,13 +650,13 @@ func _create_slot_gates():
 
 func _spawn_slot_gate(dist: float):
 	var t: Transform3D = _rail_transform(dist)
-	var center: Vector3 = t.origin
 
-	# Gap is narrow horizontally (~0.8u), tall vertically (~9u). Walls are
-	# wide flanking plates that bracket the gap on both sides.
+	# Walls must fully cover the player's move_bounds (±12 x, ±5 y) so the
+	# only way past is through the narrow vertical slit in the middle. Gap
+	# is ~0.8 wide horizontally but spans the full playable height.
 	var gap_half: float = 0.4
-	var wall_width: float = 7.0
-	var wall_height: float = 9.0
+	var wall_width: float = 14.0   # each plate reaches past the x=±12 bounds
+	var wall_height: float = 12.0  # taller than the y=±5 bounds
 	var wall_thick: float = 1.0
 
 	# Register the slot gate for LOCAL-space collision. Player checks its
@@ -650,22 +677,6 @@ func _spawn_slot_gate(dist: float):
 	var right_local := Vector3(gap_half + wall_width / 2.0, 0, 0)
 	var right_pos: Vector3 = t * right_local
 	_spawn_slot_visual(Transform3D(t.basis, right_pos), Vector3(wall_width, wall_height, wall_thick))
-
-	# Warning glow marker centered on the gap — hints the path before contact
-	var marker_mi := MeshInstance3D.new()
-	var marker_mesh := BoxMesh.new()
-	marker_mesh.size = Vector3(0.2, wall_height, 0.2)
-	marker_mi.mesh = marker_mesh
-	var marker_mat := StandardMaterial3D.new()
-	marker_mat.albedo_color = Color(1.0, 0.8, 0.1, 0.9)
-	marker_mat.emission_enabled = true
-	marker_mat.emission = Color(1.0, 0.7, 0.1)
-	marker_mat.emission_energy_multiplier = 3.0
-	marker_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	marker_mi.material_override = marker_mat
-	marker_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	hazards_container.add_child(marker_mi)
-	marker_mi.global_transform = Transform3D(t.basis, center)
 
 
 func _spawn_slot_visual(xform: Transform3D, size: Vector3):
@@ -808,9 +819,8 @@ func _setup_comms_triggers():
 		{"at": 0.42, "who": "Kiro",  "say": "Nice flying. Try not to get too comfortable.",                 "clr": Color(0.6, 0.6, 0.7)},
 		# Act 4: Climbing turn
 		{"at": 0.52, "who": "Bront", "say": "Climbing out. Watch the wrecks on the turn.",                  "clr": Color(0.6, 0.4, 0.2)},
-		# Act 5: Escort section
-		{"at": 0.60, "who": "Nyx",   "say": "Kiro took a hit! They're on him — shoot them off!",            "clr": Color(0.9, 0.5, 0.2)},
-		{"at": 0.68, "who": "Kiro",  "say": "I can't shake them, Raze!",                                    "clr": Color(0.6, 0.6, 0.7)},
+		# (Escort section comms are event-driven from _update_escort,
+		#  triggered when Kiro enters view and when chasers are cleared.)
 		# Final approach
 		{"at": 0.85, "who": "Bront", "say": "Final stretch. Asteroid field — stay sharp.",                  "clr": Color(0.6, 0.4, 0.2)},
 		{"at": 0.95, "who": "Nyx",   "say": "Almost through. We've got this, pack.",                        "clr": Color(0.9, 0.5, 0.2)},
@@ -1120,21 +1130,18 @@ func _on_quit():
 # ── Escort Section ───────────────────────────────────────────
 
 func _create_escort_section():
-	# Ally rides its own PathFollow3D so it stays glued to the curved rail
-	# ahead of the player. Hidden until the player enters the escort zone.
-	escort_ally_pf = PathFollow3D.new()
-	escort_ally_pf.rotation_mode = PathFollow3D.ROTATION_ORIENTED
-	escort_ally_pf.loop = false
-	path.add_child(escort_ally_pf)
-
+	# Ally is a child of path_follow so it rides the rail alongside the
+	# player; its local position is animated each frame from a state
+	# machine (entrance arc → hold → exit arc).
 	escort_ally = Node3D.new()
 	escort_ally.name = "AllyKiro"
+
 	var model := AllyShipModel.instantiate()
 	model.scale = Vector3(1.2, 1.2, 1.2)
 	model.rotation_degrees.y = -90
 	escort_ally.add_child(model)
 
-	# Rim glow so the ally reads as friendly at a glance
+	# Friendly rim glow so he reads as an ally
 	var ally_light := OmniLight3D.new()
 	ally_light.light_color = Color(0.4, 0.9, 1.0)
 	ally_light.light_energy = 2.0
@@ -1142,78 +1149,125 @@ func _create_escort_section():
 	escort_ally.add_child(ally_light)
 
 	escort_ally.visible = false
-	escort_ally_pf.add_child(escort_ally)
+	path_follow.add_child(escort_ally)
 
 
 func _update_escort(delta):
-	if escort_complete or path_follow == null or escort_ally_pf == null:
-		return
-	var ratio := path_follow.progress_ratio
-
-	# Kick off the escort when the player enters the zone
-	if not escort_triggered and ratio >= escort_start_ratio:
-		escort_triggered = true
-		_escort_begin()
-
-	if not escort_active:
+	if escort_complete or path_follow == null or escort_ally == null:
 		return
 
-	# Keep the ally a fixed distance ahead of the player along the rail
-	var total := path.curve.get_baked_length()
-	escort_ally_pf.progress = clampf(path_follow.progress + escort_lead_distance, 0.0, total)
+	match escort_phase:
+		EscortPhase.IDLE:
+			if path_follow.progress_ratio >= escort_start_ratio:
+				_escort_begin_entrance()
 
-	# Prune dead chasers, count live ones in damage range
-	var live_in_range := 0
-	var any_alive := false
-	var i := escort_chasers.size() - 1
-	while i >= 0:
-		var c = escort_chasers[i]
-		if not is_instance_valid(c):
-			escort_chasers.remove_at(i)
-		else:
-			any_alive = true
-			if escort_ally and escort_ally.global_position.distance_to(c.global_position) < escort_damage_range:
-				live_in_range += 1
-		i -= 1
+		EscortPhase.ENTERING:
+			escort_phase_time += delta
+			var t := clampf(escort_phase_time / escort_entrance_duration, 0.0, 1.0)
+			var t_eased := _ease_in_out(t)
+			var arc_y := sin(t * PI) * 2.0  # peaks at midpoint
+			escort_ally.position = escort_entry_start.lerp(escort_entry_end, t_eased) + Vector3(0, arc_y, 0)
+			# Slow barrel roll while dodging
+			escort_ally.rotation.z += delta * deg_to_rad(180.0)
 
-	if live_in_range > 0 and escort_ally_hp > 0:
-		escort_ally_hp -= delta * escort_dps_per_chaser * live_in_range
-		if escort_ally_hp <= 0:
-			_escort_ally_destroyed()
-			return
+			# "Help!" comms once he's actually on screen
+			if not escort_help_shown and t > 0.25 and squad_comms and squad_comms.has_method("show_message"):
+				escort_help_shown = true
+				squad_comms.show_message("Kiro", "Help! I can't shake them!", Color(0.6, 0.6, 0.7))
 
-	# End of escort zone: success if ally alive
-	if ratio >= escort_end_ratio:
-		_escort_end(true)
-		return
-	# All chasers dead before zone end: also success
-	if not any_alive:
-		_escort_end(true)
+			if t >= 1.0:
+				_escort_begin_holding()
+
+		EscortPhase.HOLDING:
+			# Idle bob
+			var bob := sin(Time.get_ticks_msec() / 400.0) * 0.15
+			escort_ally.position = Vector3(escort_entry_end.x, escort_entry_end.y + bob, escort_entry_end.z)
+			# Straighten out of the roll
+			escort_ally.rotation.z = lerp_angle(escort_ally.rotation.z, 0.0, 4.0 * delta)
+
+			# Chaser damage
+			var live_in_range := 0
+			var any_alive := false
+			var i := escort_chasers.size() - 1
+			while i >= 0:
+				var c = escort_chasers[i]
+				if not is_instance_valid(c):
+					escort_chasers.remove_at(i)
+				else:
+					any_alive = true
+					if escort_ally.global_position.distance_to(c.global_position) < escort_damage_range:
+						live_in_range += 1
+				i -= 1
+
+			if live_in_range > 0 and escort_ally_hp > 0:
+				escort_ally_hp -= delta * escort_dps_per_chaser * live_in_range
+				if escort_ally_hp <= 0:
+					_escort_ally_destroyed()
+					return
+
+			# Success when all chasers down
+			if not any_alive:
+				if not escort_thanks_shown and squad_comms and squad_comms.has_method("show_message"):
+					escort_thanks_shown = true
+					squad_comms.show_message("Kiro", "Thanks! I owe you one.", Color(0.6, 0.6, 0.7))
+				_escort_begin_exit()
+
+		EscortPhase.EXITING:
+			escort_phase_time += delta
+			var t2 := clampf(escort_phase_time / escort_exit_duration, 0.0, 1.0)
+			var t2_eased := _ease_out(t2)
+			var arc_y2 := sin(t2 * PI) * 1.5
+			escort_ally.position = escort_entry_end.lerp(escort_exit_end, t2_eased) + Vector3(0, arc_y2, 0)
+			escort_ally.rotation.z += delta * deg_to_rad(120.0)
+			if t2 >= 1.0:
+				escort_phase = EscortPhase.DONE
+				escort_complete = true
+				escort_ally.visible = false
+
+		EscortPhase.DONE:
+			pass
 
 
-func _escort_begin():
-	escort_active = true
+func _escort_begin_entrance():
+	escort_phase = EscortPhase.ENTERING
+	escort_phase_time = 0.0
 	escort_ally_hp = escort_ally_max_hp
-	if escort_ally:
-		escort_ally.visible = true
-	if escort_ally_pf:
-		escort_ally_pf.progress = path_follow.progress + escort_lead_distance
+	escort_ally.position = escort_entry_start
+	escort_ally.rotation = Vector3.ZERO
+	escort_ally.visible = true
 
-	# Spawn 5 chasers clustered around and slightly behind the ally
-	var base_dist: float = path_follow.progress + escort_lead_distance - 4.0
+
+func _escort_begin_holding():
+	escort_phase = EscortPhase.HOLDING
+	escort_phase_time = 0.0
+	escort_ally.rotation.z = 0.0
+
+	# Spawn 5 chasers as children of path_follow alongside the ally so
+	# they can track Kiro's local position (x/y/z) exactly as the rail
+	# advances. Each gets a distinct offset behind/around the ally.
 	for n in 5:
-		var offset_dist: float = base_dist - n * 3.0
-		var lx: float = (n - 2) * 3.5
-		var ly: float = 1.5 + sin(n * 1.1) * 1.5
 		var fighter = Area3D.new()
 		fighter.set_script(EnemyFighterScript)
-		fighter.position = _rail_pos(offset_dist, lx, ly)
-		enemies_container.add_child(fighter)
+		fighter.tracking_mode = true
+		fighter.custom_target = escort_ally
+		fighter.tracking_offset = Vector3(
+			(n - 2) * 3.5,
+			1.5 + sin(n * 1.1) * 1.5,
+			4.0 + n * 2.0,  # positive Z = behind the ally in path-local
+		)
+		# Seed local position near the offset so they don't lerp from 0
+		fighter.position = escort_ally.position + fighter.tracking_offset
+		path_follow.add_child(fighter)
 		escort_chasers.append(fighter)
 
 
+func _escort_begin_exit():
+	escort_phase = EscortPhase.EXITING
+	escort_phase_time = 0.0
+
+
 func _escort_ally_destroyed():
-	escort_active = false
+	escort_phase = EscortPhase.DONE
 	escort_complete = true
 	if escort_ally:
 		escort_ally.visible = false
@@ -1222,11 +1276,164 @@ func _escort_ally_destroyed():
 		squad_comms.show_message("Raze", "KIRO! ...dammit.", Color(0.3, 0.5, 0.9))
 
 
-func _escort_end(success: bool):
-	escort_active = false
-	escort_complete = true
-	if escort_ally:
-		# Ally peels off — hide with a small delay to avoid popping
-		escort_ally.visible = false
-	if success and squad_comms and squad_comms.has_method("show_message"):
-		squad_comms.show_message("Kiro", "Clear! Thanks for the save, alpha.", Color(0.6, 0.6, 0.7))
+func _ease_in_out(t: float) -> float:
+	return t * t * (3.0 - 2.0 * t)
+
+
+func _ease_out(t: float) -> float:
+	return 1.0 - (1.0 - t) * (1.0 - t)
+
+
+# ── Tutorial System ──────────────────────────────────────────
+
+func _setup_tutorials():
+	tutorials = [
+		{
+			"id": "fire",
+			"trigger_ratio": 0.0,  # immediately on level start
+			"message": "HOLD RT / SPACE\nTO FIRE YOUR WEAPONS",
+		},
+		{
+			"id": "tilt",
+			"trigger": "enemies_cleared",  # fires after tutorial enemies destroyed
+			"message": "HOLD L1 OR R1\nTO FLY SIDEWAYS",
+		},
+		{
+			"id": "missile",
+			"trigger": "escort_holding",  # fires once Kiro is under attack
+			"message": "HOLD X TO LOCK ON\nPRESS Y TO CYCLE TARGETS\nRELEASE X TO FIRE",
+		},
+	]
+	_spawn_tutorial_enemies()
+	_build_tutorial_ui()
+
+
+func _spawn_tutorial_enemies():
+	# Two fighters ahead of the player at level start — first shots the
+	# player takes should go into these. Tracked so the "tilt" tutorial
+	# fires when they're cleared.
+	var spawn_points := [
+		[35, -4, 1],
+		[35,  4, 1],
+	]
+	for sp in spawn_points:
+		var fighter = Area3D.new()
+		fighter.set_script(EnemyFighterScript)
+		fighter.position = _rail_pos(sp[0], sp[1], sp[2])
+		enemies_container.add_child(fighter)
+		tutorial_enemies.append(fighter)
+
+
+func _build_tutorial_ui():
+	# Reuse the HUD canvas layer so it renders above the 3D world
+	var canvas: CanvasLayer = hud.get_parent() as CanvasLayer
+	if canvas == null:
+		return
+
+	tutorial_panel = PanelContainer.new()
+	tutorial_panel.name = "TutorialPanel"
+	tutorial_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	tutorial_panel.offset_left = -380
+	tutorial_panel.offset_right = 380
+	tutorial_panel.offset_top = 360
+	tutorial_panel.offset_bottom = 500
+	tutorial_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.02, 0.05, 0.15, 0.88)
+	style.border_color = Color(0.4, 0.75, 1.0, 0.95)
+	style.set_border_width_all(3)
+	style.set_corner_radius_all(8)
+	style.set_content_margin_all(24)
+	tutorial_panel.add_theme_stylebox_override("panel", style)
+
+	tutorial_label = Label.new()
+	tutorial_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	tutorial_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	var label_settings := LabelSettings.new()
+	label_settings.font_size = 42
+	label_settings.font_color = Color(0.95, 0.98, 1.0)
+	label_settings.outline_size = 4
+	label_settings.outline_color = Color(0.1, 0.2, 0.5)
+	label_settings.shadow_size = 6
+	label_settings.shadow_color = Color(0.0, 0.3, 0.7, 0.6)
+	label_settings.shadow_offset = Vector2(0, 3)
+	tutorial_label.label_settings = label_settings
+	tutorial_panel.add_child(tutorial_label)
+
+	tutorial_panel.visible = false
+	tutorial_panel.modulate = Color(1, 1, 1, 0)
+	canvas.add_child(tutorial_panel)
+
+
+func _update_tutorials():
+	if tutorial_panel == null:
+		return
+
+	# Track whether the starter enemies are all down — used as a trigger
+	# for the tilt tutorial.
+	if not tutorial_enemies_cleared and tutorial_enemies.size() > 0:
+		var any_alive := false
+		for e in tutorial_enemies:
+			if is_instance_valid(e):
+				any_alive = true
+				break
+		if not any_alive:
+			tutorial_enemies_cleared = true
+
+	if active_tutorial.is_empty():
+		if tutorial_index < tutorials.size():
+			var next_tut: Dictionary = tutorials[tutorial_index]
+			var can_trigger := false
+			if next_tut.has("trigger_ratio"):
+				can_trigger = path_follow.progress_ratio >= float(next_tut.trigger_ratio)
+			elif next_tut.get("trigger", "") == "enemies_cleared":
+				can_trigger = tutorial_enemies_cleared
+			elif next_tut.get("trigger", "") == "escort_holding":
+				can_trigger = escort_phase == EscortPhase.HOLDING
+			if can_trigger:
+				_start_tutorial(next_tut)
+	else:
+		if _is_tutorial_done(active_tutorial.id):
+			_complete_tutorial()
+
+
+func _start_tutorial(tut: Dictionary):
+	active_tutorial = tut
+	tutorial_speed_mult = tutorial_slow_factor
+	tutorial_label.text = tut.message
+	tutorial_panel.visible = true
+	if tutorial_tween and tutorial_tween.is_valid():
+		tutorial_tween.kill()
+	tutorial_tween = create_tween()
+	tutorial_tween.tween_property(tutorial_panel, "modulate:a", 1.0, 0.3)
+
+
+func _complete_tutorial():
+	tutorial_speed_mult = 1.0
+	active_tutorial = {}
+	tutorial_index += 1
+	if tutorial_tween and tutorial_tween.is_valid():
+		tutorial_tween.kill()
+	tutorial_tween = create_tween()
+	tutorial_tween.tween_property(tutorial_panel, "modulate:a", 0.0, 0.3)
+	tutorial_tween.tween_callback(func():
+		if tutorial_panel:
+			tutorial_panel.visible = false
+	)
+
+
+func _is_tutorial_done(id: String) -> bool:
+	match id:
+		"fire":
+			return player != null and player.total_shots_fired > 0
+		"tilt":
+			# Player must push the ship into a clear sideways roll
+			return player != null and absf(player.tilt_current) > deg_to_rad(60.0)
+		"missile":
+			# Clear as soon as the player starts holding X so the lock-on
+			# animation actually plays — otherwise the tutorial slowdown
+			# would make the player think the mechanic is stuck.
+			return player != null and Input.is_action_pressed("tracking_missile")
+		_:
+			return true

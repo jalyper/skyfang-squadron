@@ -76,6 +76,12 @@ func _setup_input_actions():
 	_add_joy_axis("aim_down", JOY_AXIS_RIGHT_Y, 1.0)
 	_add_joy_axis("aim_left", JOY_AXIS_RIGHT_X, -1.0)
 	_add_joy_axis("aim_right", JOY_AXIS_RIGHT_X, 1.0)
+	# Aim actions bypass the default action deadzone so Input.get_vector
+	# returns non-zero for any real stick deflection, not just > 0.5.
+	InputMap.action_set_deadzone("aim_up", 0.0)
+	InputMap.action_set_deadzone("aim_down", 0.0)
+	InputMap.action_set_deadzone("aim_left", 0.0)
+	InputMap.action_set_deadzone("aim_right", 0.0)
 
 	# ── Shoot normal (R2 / Space) ──
 	_add_key_action("shoot", KEY_SPACE)

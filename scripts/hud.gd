@@ -106,7 +106,20 @@ func _draw_crosshair():
 
 
 func _update_crosshair():
-	pass  # crosshair is fixed at center, nothing to update
+	var player = GameManager.player
+	if player == null or crosshair == null:
+		return
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	if not player.has_method("get_reticle_world_position"):
+		return
+	var reticle_world: Vector3 = player.get_reticle_world_position()
+	# Skip if reticle is behind the camera (projection would wrap)
+	if cam.is_position_behind(reticle_world):
+		return
+	var screen_pos := cam.unproject_position(reticle_world)
+	crosshair.position = screen_pos - crosshair.size / 2.0
 
 
 # ── Target Overlay (brackets + lock-on progress) ─────────────
