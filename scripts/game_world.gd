@@ -40,13 +40,32 @@ var shockwave_speed: float = 14.0    # slightly slower than rail_speed — must 
 var shockwave_damage_dist: float = 8.0
 var shockwave_zones: Array = [
 	# [start_ratio, end_ratio] — sections where shockwave activates
-	[0.15, 0.35],   # Act 1-2: chase through city
-	[0.55, 0.72],   # Act 3: trench pursuit
+	[0.15, 0.30],   # Act 2 banking descent — boost through
+	[0.80, 0.93],   # Final approach asteroid field — boost out
 ]
 
 # Comms
 var comms_triggers: Array = []
 var comms_fired: Dictionary = {}
+
+# ── Escort Section State ──
+# Kiro flies ahead of the player; a swarm of chasers stays in range and
+# deals DPS to him. Player must clear the chasers before the zone ends,
+# or Kiro dies and sits out the boss fight.
+const AllyShipModel := preload("res://assets/models/Meshy_AI_space_ship_starfox__0410213457_texture.glb")
+var escort_start_ratio: float = 0.58
+var escort_end_ratio: float = 0.78
+var escort_triggered: bool = false
+var escort_active: bool = false
+var escort_complete: bool = false
+var escort_ally_pf: PathFollow3D = null
+var escort_ally: Node3D = null
+var escort_ally_hp: float = 100.0
+var escort_ally_max_hp: float = 100.0
+var escort_chasers: Array = []
+var escort_damage_range: float = 20.0
+var escort_dps_per_chaser: float = 6.0
+var escort_lead_distance: float = 35.0
 
 
 func _ready():
@@ -79,6 +98,7 @@ func _process(delta):
 		_on_level_complete()
 	_check_comms_triggers()
 	_update_shockwave(delta)
+	_update_escort(delta)
 
 
 # ── Environment ───────────────────────────────────────────────
@@ -216,25 +236,39 @@ func _create_nebula():
 # ── Rail Path ─────────────────────────────────────────────────
 
 func _create_rail_path():
+	# Roller-coaster style rail: gentle intro → banking right descent →
+	# straight slot-gate run → climbing left turn → escort straight → final
+	# climb. No loops. The rail camera follows the rail's basis, so tilts
+	# and curves produce a roller-coaster feel.
 	path = Path3D.new()
 	var curve = Curve3D.new()
+	curve.up_vector_enabled = true
 
-	# Straight rail down -Z — no lateral or vertical curves.
-	# The camera derives its orientation from the PathFollow3D, so any X/Y
-	# offsets in the path cause visible sway. Keep the rail perfectly straight
-	# and place level content around the corridor instead.
-	# ~600 units total, evenly spaced control points.
-	var pts = [
-		[Vector3(0, 0, 0),       Vector3(),           Vector3(0, 0, -30)],
-		[Vector3(0, 0, -100),    Vector3(0, 0, 30),   Vector3(0, 0, -30)],
-		[Vector3(0, 0, -200),    Vector3(0, 0, 30),   Vector3(0, 0, -30)],
-		[Vector3(0, 0, -300),    Vector3(0, 0, 30),   Vector3(0, 0, -30)],
-		[Vector3(0, 0, -400),    Vector3(0, 0, 30),   Vector3(0, 0, -30)],
-		[Vector3(0, 0, -500),    Vector3(0, 0, 30),   Vector3(0, 0, -30)],
-		[Vector3(0, 0, -600),    Vector3(0, 0, 30),   Vector3()],
+	# [position, tilt_degrees]
+	var pts := [
+		[Vector3(0, 0, 0),        0.0],   # intro start
+		[Vector3(0, 0, -90),      0.0],   # intro straight
+		[Vector3(20, -10, -160),  12.0],  # begin banking right + descent
+		[Vector3(50, -25, -230),  20.0],  # mid banked dive
+		[Vector3(55, -30, -300),  10.0],  # pull out, entering slot run
+		[Vector3(55, -30, -370),  0.0],   # slot run straight
+		[Vector3(35, -20, -440),  -15.0], # climbing left-banked turn
+		[Vector3(5, -5, -510),    -8.0],  # turn exit
+		[Vector3(0, 0, -590),     0.0],   # escort section straight
+		[Vector3(0, 5, -680),     0.0],   # final gentle climb
+		[Vector3(0, 5, -770),     0.0],   # finish
 	]
-	for p in pts:
-		curve.add_point(p[0], p[1], p[2])
+
+	for i in pts.size():
+		var p: Vector3 = pts[i][0]
+		var tilt: float = pts[i][1]
+		# Smooth Catmull-Rom-ish tangents computed from neighbors
+		var prev_p: Vector3 = (pts[i - 1][0] if i > 0 else p)
+		var next_p: Vector3 = (pts[i + 1][0] if i < pts.size() - 1 else p)
+		var out_t := (next_p - prev_p) * 0.25
+		var in_t := -out_t
+		curve.add_point(p, in_t, out_t)
+		curve.set_point_tilt(i, deg_to_rad(tilt))
 
 	path.curve = curve
 	add_child(path)
@@ -243,6 +277,34 @@ func _create_rail_path():
 	path_follow.rotation_mode = PathFollow3D.ROTATION_ORIENTED
 	path_follow.loop = false
 	path.add_child(path_follow)
+
+
+# ── Rail-local helpers ───────────────────────────────────────
+# The curved rail means obstacles, enemies, and effects must be placed
+# relative to a distance along the rail plus a local offset, not in raw
+# world coordinates. These helpers convert rail-local coords to world.
+
+func _rail_transform(dist: float) -> Transform3D:
+	var curve: Curve3D = path.curve
+	var total := curve.get_baked_length()
+	var d := clampf(dist, 0.0, total)
+	return curve.sample_baked_with_rotation(d, false, true)
+
+
+func _rail_pos(dist: float, lx: float, ly: float, lz: float = 0.0) -> Vector3:
+	return _rail_transform(dist) * Vector3(lx, ly, lz)
+
+
+func _rail_forward(dist: float) -> Vector3:
+	var curve: Curve3D = path.curve
+	var total := curve.get_baked_length()
+	var d := clampf(dist, 0.0, total)
+	var a := curve.sample_baked(d)
+	var b := curve.sample_baked(minf(d + 1.0, total))
+	var f := (b - a)
+	if f.length_squared() < 0.0001:
+		return Vector3(0, 0, -1)
+	return f.normalized()
 
 
 # ── Path Visuals (tunnel feel + end glow) ─────────────────────
@@ -362,75 +424,62 @@ func _create_camera():
 # Format: [position, type, scale, rotation_y]
 
 func _create_buildings():
-	var obstacles = [
-		# === ACT 1: City outskirts (Z=-30 to -55) ===
-		[Vector3(15, 0, -35),   "skyscraper", 18.0, 0.0],
-		[Vector3(-14, 0, -45),  "skyscraper", 25.0, 45.0],
-		[Vector3(18, 0, -55),   "skyscraper", 15.0, -30.0],
+	# Content is defined in rail-local space: (distance_along_rail, local_x,
+	# local_y, type, payload...). Helpers convert these into world positions
+	# so content follows the curved rail automatically.
+	var obstacles := [
+		# === ACT 1: Intro city (dist 25-110) ===
+		[ 30,  14,  0, "skyscraper", 18.0, 0.0],
+		[ 45, -14,  0, "skyscraper", 24.0, 30.0],
+		[ 60,  12,  0, "skyscraper", 16.0, -20.0],
+		[ 75, -12,  0, "skyscraper", 22.0, 45.0],
+		[ 90,  14,  0, "skyscraper", 18.0, 10.0],
+		[105,  -6,  1, "wreck", 6.0, 15.0],
 
-		# === City proper (Z=-60 to -95) ===
-		[Vector3(10, 0, -65),   "skyscraper", 20.0, 10.0],
-		[Vector3(-10, 0, -70),  "skyscraper", 28.0, -20.0],
-		[Vector3(12, 0, -85),   "skyscraper", 16.0, 60.0],
-		[Vector3(-12, 0, -90),  "skyscraper", 24.0, -45.0],
-		# Crashed ship in the street
-		[Vector3(4, 1, -80),    "wreck", 6.0, 15.0],
+		# === ACT 2: Banking descent (dist 140-220) ===
+		[150,  10,  0, "wreck", 10.0, 60.0],
+		[180, -10,  0, "wreck", 12.0, -30.0],
+		[210,   8, -2, "wreck", 8.0, 20.0],
 
-		# === Narrow corridor walls (Z=-105 to -135) ===
-		[Vector3(7, 8, -120),   "box", Vector3(3, 18, 35), 0.0],
-		[Vector3(-7, 8, -120),  "box", Vector3(3, 18, 35), 0.0],
+		# === ACT 3: Slot-run straight (dist 260-360) — slot gates added
+		#   by _create_slot_gates() below. A handful of flanking wrecks. ===
+		[250,  16,  0, "skyscraper", 14.0, -15.0],
+		[280, -16,  0, "skyscraper", 12.0, 30.0],
+		[310,  16,  2, "wreck", 9.0, 45.0],
+		[340, -16, -1, "wreck", 10.0, -60.0],
 
-		# === ACT 2: Dense combat (Z=-185 to -240) ===
-		[Vector3(14, 0, -185),  "skyscraper", 20.0, 25.0],
-		[Vector3(-13, 0, -195), "skyscraper", 22.0, -15.0],
-		[Vector3(-5, 2, -205),  "wreck", 8.0, 40.0],
-		[Vector3(10, 0, -210),  "skyscraper", 17.0, -50.0],
-		[Vector3(-11, 0, -225), "skyscraper", 26.0, 30.0],
-		[Vector3(6, 3, -232),   "wreck", 5.0, -60.0],
-		[Vector3(16, 0, -235),  "skyscraper", 14.0, 0.0],
-		[Vector3(-15, 0, -240), "skyscraper", 19.0, 70.0],
+		# === ACT 4: Climbing left turn (dist 380-460) ===
+		[400,  10,  2, "wreck", 12.0, 20.0],
+		[430, -12, -2, "wreck", 14.0, -40.0],
+		[455,   8,  3, "wreck", 10.0, 80.0],
 
-		# === Transition zone (Z=-260 to -300) ===
-		[Vector3(12, 0, -265),  "skyscraper", 22.0, -10.0],
-		[Vector3(-13, 0, -275), "skyscraper", 18.0, 35.0],
-		[Vector3(3, 4, -285),   "wreck", 10.0, 20.0],
-		[Vector3(8, 0, -290),   "skyscraper", 30.0, -40.0],
+		# === ACT 5: Escort-section lane (dist 480-620) — sparse flanking
+		#   obstacles so the chase feels open but not empty ===
+		[500,  14,  0, "wreck", 12.0, 35.0],
+		[540, -14,  0, "wreck", 14.0, -25.0],
+		[580,  12,  2, "wreck", 10.0, 55.0],
 
-		# === ACT 3: Trench dive (Z=-300 to -420) ===
-		[Vector3(6, -4, -330),  "box", Vector3(3, 12, 40), 0.0],
-		[Vector3(-6, -4, -330), "box", Vector3(3, 12, 40), 0.0],
-		# Overhanging beams
-		[Vector3(4, 2, -350),   "box", Vector3(8, 2, 4), 0.0],
-		[Vector3(-3, 3, -380),  "box", Vector3(6, 2, 4), 0.0],
-		# Wrecks lodged in the trench
-		[Vector3(3, -3, -365),  "wreck", 4.0, 90.0],
-		[Vector3(-4, -2, -400), "wreck", 5.0, -70.0],
-		# Trench exit pillars
-		[Vector3(5, -2, -410),  "box", Vector3(3, 8, 3), 0.0],
-		[Vector3(-5, -2, -415), "box", Vector3(3, 8, 3), 0.0],
-
-		# === ACT 4: Open space debris field (Z=-430 to -580) ===
-		# Massive wreck — fly through the cavity, collectible inside
-		[Vector3(0, 0, -440),   "megawreck", 45.0, 0.0],
-		[Vector3(-12, 5, -475), "wreck", 15.0, -45.0],
-		[Vector3(8, -2, -490),  "wreck", 10.0, 60.0],
-		[Vector3(-16, 2, -510), "wreck", 18.0, -20.0],
-		[Vector3(18, 1, -530),  "wreck", 8.0, 110.0],
-		[Vector3(-10, 6, -550), "wreck", 14.0, -80.0],
-		[Vector3(6, 3, -570),   "wreck", 11.0, 45.0],
-		[Vector3(-14, -1, -580), "wreck", 16.0, -30.0],
+		# === Final approach (dist 640-740) ===
+		[660,   0,  0, "megawreck", 45.0, 0.0],
+		[710,  10,  3, "wreck", 10.0, 45.0],
+		[730, -10, -2, "wreck", 12.0, -30.0],
 	]
 
 	for obs in obstacles:
-		match obs[1]:
+		var d: float = obs[0]
+		var lx: float = obs[1]
+		var ly: float = obs[2]
+		var kind: String = obs[3]
+		var world_pos: Vector3 = _rail_pos(d, lx, ly)
+		match kind:
 			"skyscraper":
-				_spawn_model_obstacle(obs[0], SkyscraperModel, obs[2], obs[3])
+				_spawn_model_obstacle(world_pos, SkyscraperModel, obs[4], obs[5])
 			"wreck":
-				_spawn_model_obstacle(obs[0], WreckModel, obs[2], obs[3])
+				_spawn_model_obstacle(world_pos, WreckModel, obs[4], obs[5])
 			"megawreck":
-				_spawn_megawreck(obs[0], obs[2], obs[3])
-			"box":
-				_spawn_box_obstacle(obs[0], obs[2])
+				_spawn_megawreck(world_pos, obs[4], obs[5])
+
+	_create_slot_gates()
 
 
 func _spawn_model_obstacle(pos: Vector3, model_scene: PackedScene, scl: float, rot_y: float):
@@ -549,148 +598,178 @@ func _spawn_box_obstacle(pos: Vector3, size: Vector3):
 # ── Phase Walls (must phase through) ─────────────────────────
 
 func _create_phase_walls():
-	var wall_positions = [
-		# Act 2 phase gauntlet
-		Vector3(0, 1, -148),
-		Vector3(0, 1, -158),
-		Vector3(0, 1, -168),
-		# Trench phase barriers (must phase while diving)
-		Vector3(0, -6, -345),
-		Vector3(0, -7, -390),
-		# Final approach barrier
-		Vector3(0, 0, -540),
+	# Phase walls removed in the level 1 redesign — the slot-gate mechanic
+	# replaces them as the "hold L1/R1 to fit through" moment. Phase is still
+	# available as a general-purpose survival tool; it just isn't required
+	# for any scripted obstacle in this level.
+	pass
+
+
+# ── Slot Gates ───────────────────────────────────────────────
+# Two hull plates with a narrow vertical gap between them. The player must
+# roll their ship (hold L1 or R1) so its profile is tall-and-narrow to slip
+# through. A head-on flat ship hits both plates.
+
+func _create_slot_gates():
+	# Slot gates along the slot-run straight (dist ~260-355)
+	var gates := [
+		270,  # first slot (teach the mechanic)
+		300,  # second
+		335,  # third (tighter after practice)
 	]
+	for d in gates:
+		_spawn_slot_gate(float(d))
 
-	for pos in wall_positions:
-		var wall := Area3D.new()
-		wall.add_to_group("phase_walls")
-		wall.add_to_group("hazards")
-		wall.position = pos
 
-		var mi := MeshInstance3D.new()
-		var mesh := BoxMesh.new()
-		mesh.size = Vector3(20, 14, 0.4)
-		mi.mesh = mesh
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+func _spawn_slot_gate(dist: float):
+	var t: Transform3D = _rail_transform(dist)
+	var center: Vector3 = t.origin
 
-		var mat := StandardMaterial3D.new()
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.albedo_color = Color(0.8, 0.2, 0.3, 0.25)
-		mat.emission_enabled = true
-		mat.emission = Color(1.0, 0.2, 0.3)
-		mat.emission_energy_multiplier = 1.5
-		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		mi.material_override = mat
-		wall.add_child(mi)
+	# Gap is narrow horizontally (~0.8u), tall vertically (~9u). Walls are
+	# wide flanking plates that bracket the gap on both sides.
+	var gap_half: float = 0.4
+	var wall_width: float = 7.0
+	var wall_height: float = 9.0
+	var wall_thick: float = 1.0
 
-		var col := CollisionShape3D.new()
-		var shape := BoxShape3D.new()
-		shape.size = Vector3(20, 14, 0.6)
-		col.shape = shape
-		wall.add_child(col)
+	# Register the slot gate for LOCAL-space collision. Player checks its
+	# own path-local position against these parameters in _check_obstacle_collision.
+	GameManager.slot_gates.append({
+		"dist": dist,
+		"gap_half": gap_half,
+		"wall_half_width": wall_width * 0.5,
+		"wall_half_height": wall_height * 0.5,
+		"wall_half_thick": wall_thick * 0.5,
+	})
 
-		hazards_container.add_child(wall)
+	# Visual walls — oriented to the rail basis so they bracket the path
+	var left_local := Vector3(-(gap_half + wall_width / 2.0), 0, 0)
+	var left_pos: Vector3 = t * left_local
+	_spawn_slot_visual(Transform3D(t.basis, left_pos), Vector3(wall_width, wall_height, wall_thick))
+
+	var right_local := Vector3(gap_half + wall_width / 2.0, 0, 0)
+	var right_pos: Vector3 = t * right_local
+	_spawn_slot_visual(Transform3D(t.basis, right_pos), Vector3(wall_width, wall_height, wall_thick))
+
+	# Warning glow marker centered on the gap — hints the path before contact
+	var marker_mi := MeshInstance3D.new()
+	var marker_mesh := BoxMesh.new()
+	marker_mesh.size = Vector3(0.2, wall_height, 0.2)
+	marker_mi.mesh = marker_mesh
+	var marker_mat := StandardMaterial3D.new()
+	marker_mat.albedo_color = Color(1.0, 0.8, 0.1, 0.9)
+	marker_mat.emission_enabled = true
+	marker_mat.emission = Color(1.0, 0.7, 0.1)
+	marker_mat.emission_energy_multiplier = 3.0
+	marker_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	marker_mi.material_override = marker_mat
+	marker_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	hazards_container.add_child(marker_mi)
+	marker_mi.global_transform = Transform3D(t.basis, center)
+
+
+func _spawn_slot_visual(xform: Transform3D, size: Vector3):
+	var mi := MeshInstance3D.new()
+	var mesh := BoxMesh.new()
+	mesh.size = size
+	mi.mesh = mesh
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.material_override = _slot_wall_material()
+	hazards_container.add_child(mi)
+	mi.global_transform = xform
+
+
+func _slot_wall_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.25, 0.3, 0.45)
+	mat.metallic = 0.7
+	mat.roughness = 0.4
+	mat.emission_enabled = true
+	mat.emission = Color(0.4, 0.2, 0.1)
+	mat.emission_energy_multiplier = 0.6
+	return mat
 
 
 # ── Hazards (asteroids + debris) ──────────────────────────────
 
 func _create_hazards():
-	var data = [
-		# Act 1: Scattered debris
-		[Vector3(3, 0, -25), 2.0],
-		[Vector3(-5, 1, -30), 1.5],
-		[Vector3(6, -1, -180), 2.0],
-		[Vector3(-4, 2, -250), 1.8],
-		[Vector3(3, -1, -255), 2.2],
-		[Vector3(-2, 3, -280), 1.5],
-		# Act 3: Trench debris
-		[Vector3(2, -6, -335), 1.5],
-		[Vector3(-3, -5, -355), 2.0],
-		[Vector3(1, -7, -375), 1.8],
-		[Vector3(-2, -4, -400), 2.5],
-		# Act 4: Asteroid field
-		[Vector3(5, 1, -435), 3.0],
-		[Vector3(-6, -1, -445), 2.5],
-		[Vector3(3, 3, -455), 2.0],
-		[Vector3(-8, 0, -470), 3.5],
-		[Vector3(7, -2, -485), 2.0],
-		[Vector3(-3, 4, -500), 2.8],
-		[Vector3(0, -1, -515), 3.0],
-		[Vector3(6, 2, -525), 2.0],
-		[Vector3(-5, -2, -545), 2.5],
-		[Vector3(4, 1, -560), 1.8],
-		[Vector3(-7, 3, -575), 3.0],
-		[Vector3(2, -1, -590), 2.2],
+	# (distance_along_rail, local_x, local_y, size)
+	var data := [
+		# Act 1 intro
+		[ 25,  4,  0, 2.0],
+		[ 40, -5,  1, 1.5],
+		# Act 2 banked descent
+		[170,  6, -1, 2.0],
+		[200, -4,  2, 1.8],
+		# Final approach asteroid field
+		[640,  5,  1, 3.0],
+		[680, -6, -1, 2.5],
+		[700,  3,  3, 2.0],
+		[720, -5,  0, 3.5],
+		[740,  7, -2, 2.0],
 	]
 	for d in data:
+		var world_pos: Vector3 = _rail_pos(d[0], d[1], d[2])
 		var asteroid = Area3D.new()
 		asteroid.set_script(AsteroidScript)
-		asteroid.position = d[0]
-		asteroid.set_meta("size", d[1])
+		asteroid.position = world_pos
+		asteroid.set_meta("size", d[3])
 		hazards_container.add_child(asteroid)
 
 
 # ── Enemies ───────────────────────────────────────────────────
 
 func _create_enemies():
-	# Turrets on buildings and structures
-	for pos in [
-		# Act 1: City turrets
-		Vector3(-10, 16, -70),
-		# Act 2: Combat zone turrets
-		Vector3(10, 12, -210),
-		# Act 3: Trench turrets (on walls)
-		Vector3(-5, 1, -365),
-		# Act 4: Ruin turrets
-		Vector3(12, 4, -490),
-	]:
+	# Turrets placed via rail distance. (dist, lx, ly)
+	var turret_points := [
+		[ 70, -10,  16],  # Act 1 city
+		[180,  12,   6],  # Act 2 descent
+		[430, -12,   4],  # Act 4 climbing turn
+	]
+	for tp in turret_points:
 		var turret = Area3D.new()
 		turret.set_script(TurretScript)
-		turret.position = pos
+		turret.position = _rail_pos(tp[0], tp[1], tp[2])
 		enemies_container.add_child(turret)
 
-	# Fighter waves
-	var waves = [
-		# Act 1: City
-		[Vector3(0, 2, -55), 2],
-		[Vector3(0, 2, -140), 2],
-		[Vector3(0, 2, -260), 2],
-		# Act 3: Trench ambush
-		[Vector3(0, -6, -370), 2],
-		# Act 4: Asteroid field fighters
-		[Vector3(0, 2, -450), 2],
-		[Vector3(0, 1, -550), 3],  # final wave
+	# Fighter waves (dist, count, spread_scale)
+	var waves := [
+		[ 60, 2, 4.0],  # Act 1 intro ambush
+		[170, 2, 4.0],  # descent wave
+		[420, 3, 4.0],  # post-climbing turn
 	]
 	for wave in waves:
-		var center: Vector3 = wave[0]
+		var dist: float = float(wave[0])
 		var count: int = wave[1]
+		var spread: float = wave[2]
 		for i in count:
-			var offset = Vector3(
-				(i - count / 2.0) * 4.0,
-				sin(i * 1.5) * 2.0,
-				i * 3.0
-			)
+			var lx: float = (i - count / 2.0) * spread
+			var ly: float = sin(i * 1.5) * 2.0
+			var lz: float = -float(i) * 3.0  # stagger behind the spawn point
+			var world_pos: Vector3 = _rail_pos(dist, lx, ly, lz)
 			var fighter = Area3D.new()
 			fighter.set_script(EnemyFighterScript)
-			fighter.position = center + offset
+			fighter.position = world_pos
 			enemies_container.add_child(fighter)
+
+	# Escort section (Act 5) — ally + chasers spawned as a unit
+	_create_escort_section()
 
 
 # ── Pickups (guaranteed shield recharges at key points) ──────
 
 func _create_pickups():
-	# Place two shield pickups at strategic locations:
-	# one mid-level after heavy combat, one in the asteroid field
-	var shield_positions := [
-		Vector3(0, 1, -295),   # after Act 2 combat gauntlet
-		Vector3(-2, 0, -505),  # mid asteroid field, Act 4
+	# (distance_along_rail, local_x, local_y)
+	var shield_points := [
+		[240,  0,  1],  # reward for surviving the descent, before the slot run
+		[470, -2,  0],  # reward for clearing the climbing turn
 	]
-	for pos in shield_positions:
+	for sp in shield_points:
 		var pickup := Area3D.new()
 		pickup.set_script(PickupScript)
 		pickup.pickup_type = PickupScript.PickupType.SHIELD
-		pickup.position = pos
-		pickup.lifetime = 999.0  # static pickups don't expire
+		pickup.position = _rail_pos(sp[0], sp[1], sp[2])
+		pickup.lifetime = 999.0
 		hazards_container.add_child(pickup)
 
 
@@ -719,22 +798,22 @@ func _create_ui():
 
 func _setup_comms_triggers():
 	comms_triggers = [
-		# Act 1: City
-		{"at": 0.01, "who": "Nyx",   "say": "City ahead. Stay low between the buildings.",          "clr": Color(0.9, 0.5, 0.2)},
-		{"at": 0.08, "who": "Kiro",  "say": "Fighters! Let's see who drops more.",                   "clr": Color(0.6, 0.6, 0.7)},
-		{"at": 0.15, "who": "Bront", "say": "Narrow gap ahead. Tilt to squeeze through.",           "clr": Color(0.6, 0.4, 0.2)},
-		# Act 2: Phase gauntlet
-		{"at": 0.25, "who": "Nyx",   "say": "Phase barriers! Ghost through them.",                  "clr": Color(0.9, 0.5, 0.2)},
-		{"at": 0.35, "who": "Kiro",  "say": "Heavy resistance. Lock on and let missiles fly.",      "clr": Color(0.6, 0.6, 0.7)},
-		# Act 3: Trench dive
-		{"at": 0.48, "who": "Bront", "say": "We're diving into the trench. Hold steady.",           "clr": Color(0.6, 0.4, 0.2)},
-		{"at": 0.55, "who": "Nyx",   "say": "Watch the overhangs! Phase if you need to.",           "clr": Color(0.9, 0.5, 0.2)},
-		{"at": 0.62, "who": "Kiro",  "say": "Ambush! They were waiting for us down here.",          "clr": Color(0.6, 0.6, 0.7)},
-		# Act 4: Asteroid field
-		{"at": 0.72, "who": "Bront", "say": "Open space... but it's full of debris.",               "clr": Color(0.6, 0.4, 0.2)},
-		{"at": 0.80, "who": "Nyx",   "say": "Massive wave incoming. Shoot the asteroids for drops.", "clr": Color(0.9, 0.5, 0.2)},
-		{"at": 0.88, "who": "Kiro",  "say": "This is it. Everything they've got.",                  "clr": Color(0.6, 0.6, 0.7)},
-		{"at": 0.95, "who": "Bront", "say": "Almost through. We've got this, pack.",                "clr": Color(0.6, 0.4, 0.2)},
+		# Act 1: Intro city
+		{"at": 0.02, "who": "Nyx",   "say": "City ahead. Stay tight through the skyline.",                 "clr": Color(0.9, 0.5, 0.2)},
+		{"at": 0.09, "who": "Kiro",  "say": "Fighters! Let's see who drops more.",                          "clr": Color(0.6, 0.6, 0.7)},
+		# Act 2: Banked descent
+		{"at": 0.18, "who": "Bront", "say": "Bank right and dive — I've got your six.",                     "clr": Color(0.6, 0.4, 0.2)},
+		# Act 3: Slot gates
+		{"at": 0.32, "who": "Nyx",   "say": "Slot gates! Roll your ship sideways to thread them.",          "clr": Color(0.9, 0.5, 0.2)},
+		{"at": 0.42, "who": "Kiro",  "say": "Nice flying. Try not to get too comfortable.",                 "clr": Color(0.6, 0.6, 0.7)},
+		# Act 4: Climbing turn
+		{"at": 0.52, "who": "Bront", "say": "Climbing out. Watch the wrecks on the turn.",                  "clr": Color(0.6, 0.4, 0.2)},
+		# Act 5: Escort section
+		{"at": 0.60, "who": "Nyx",   "say": "Kiro took a hit! They're on him — shoot them off!",            "clr": Color(0.9, 0.5, 0.2)},
+		{"at": 0.68, "who": "Kiro",  "say": "I can't shake them, Raze!",                                    "clr": Color(0.6, 0.6, 0.7)},
+		# Final approach
+		{"at": 0.85, "who": "Bront", "say": "Final stretch. Asteroid field — stay sharp.",                  "clr": Color(0.6, 0.4, 0.2)},
+		{"at": 0.95, "who": "Nyx",   "say": "Almost through. We've got this, pack.",                        "clr": Color(0.9, 0.5, 0.2)},
 	]
 
 
@@ -1036,3 +1115,118 @@ func _on_retry():
 
 func _on_quit():
 	get_tree().quit()
+
+
+# ── Escort Section ───────────────────────────────────────────
+
+func _create_escort_section():
+	# Ally rides its own PathFollow3D so it stays glued to the curved rail
+	# ahead of the player. Hidden until the player enters the escort zone.
+	escort_ally_pf = PathFollow3D.new()
+	escort_ally_pf.rotation_mode = PathFollow3D.ROTATION_ORIENTED
+	escort_ally_pf.loop = false
+	path.add_child(escort_ally_pf)
+
+	escort_ally = Node3D.new()
+	escort_ally.name = "AllyKiro"
+	var model := AllyShipModel.instantiate()
+	model.scale = Vector3(1.2, 1.2, 1.2)
+	model.rotation_degrees.y = -90
+	escort_ally.add_child(model)
+
+	# Rim glow so the ally reads as friendly at a glance
+	var ally_light := OmniLight3D.new()
+	ally_light.light_color = Color(0.4, 0.9, 1.0)
+	ally_light.light_energy = 2.0
+	ally_light.omni_range = 8.0
+	escort_ally.add_child(ally_light)
+
+	escort_ally.visible = false
+	escort_ally_pf.add_child(escort_ally)
+
+
+func _update_escort(delta):
+	if escort_complete or path_follow == null or escort_ally_pf == null:
+		return
+	var ratio := path_follow.progress_ratio
+
+	# Kick off the escort when the player enters the zone
+	if not escort_triggered and ratio >= escort_start_ratio:
+		escort_triggered = true
+		_escort_begin()
+
+	if not escort_active:
+		return
+
+	# Keep the ally a fixed distance ahead of the player along the rail
+	var total := path.curve.get_baked_length()
+	escort_ally_pf.progress = clampf(path_follow.progress + escort_lead_distance, 0.0, total)
+
+	# Prune dead chasers, count live ones in damage range
+	var live_in_range := 0
+	var any_alive := false
+	var i := escort_chasers.size() - 1
+	while i >= 0:
+		var c = escort_chasers[i]
+		if not is_instance_valid(c):
+			escort_chasers.remove_at(i)
+		else:
+			any_alive = true
+			if escort_ally and escort_ally.global_position.distance_to(c.global_position) < escort_damage_range:
+				live_in_range += 1
+		i -= 1
+
+	if live_in_range > 0 and escort_ally_hp > 0:
+		escort_ally_hp -= delta * escort_dps_per_chaser * live_in_range
+		if escort_ally_hp <= 0:
+			_escort_ally_destroyed()
+			return
+
+	# End of escort zone: success if ally alive
+	if ratio >= escort_end_ratio:
+		_escort_end(true)
+		return
+	# All chasers dead before zone end: also success
+	if not any_alive:
+		_escort_end(true)
+
+
+func _escort_begin():
+	escort_active = true
+	escort_ally_hp = escort_ally_max_hp
+	if escort_ally:
+		escort_ally.visible = true
+	if escort_ally_pf:
+		escort_ally_pf.progress = path_follow.progress + escort_lead_distance
+
+	# Spawn 5 chasers clustered around and slightly behind the ally
+	var base_dist: float = path_follow.progress + escort_lead_distance - 4.0
+	for n in 5:
+		var offset_dist: float = base_dist - n * 3.0
+		var lx: float = (n - 2) * 3.5
+		var ly: float = 1.5 + sin(n * 1.1) * 1.5
+		var fighter = Area3D.new()
+		fighter.set_script(EnemyFighterScript)
+		fighter.position = _rail_pos(offset_dist, lx, ly)
+		enemies_container.add_child(fighter)
+		escort_chasers.append(fighter)
+
+
+func _escort_ally_destroyed():
+	escort_active = false
+	escort_complete = true
+	if escort_ally:
+		escort_ally.visible = false
+	GameManager.set("ally_kiro_lost", true)
+	if squad_comms and squad_comms.has_method("show_message"):
+		squad_comms.show_message("Raze", "KIRO! ...dammit.", Color(0.3, 0.5, 0.9))
+
+
+func _escort_end(success: bool):
+	escort_active = false
+	escort_complete = true
+	if escort_ally:
+		# Ally peels off — hide with a small delay to avoid popping
+		escort_ally.visible = false
+	if success and squad_comms and squad_comms.has_method("show_message"):
+		squad_comms.show_message("Kiro", "Clear! Thanks for the save, alpha.", Color(0.6, 0.6, 0.7))

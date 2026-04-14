@@ -5,12 +5,23 @@ var game_world: Node3D = null
 var player: Area3D = null
 var projectiles_container: Node3D = null
 var obstacle_aabbs: Array = []  # [{pos: Vector3, half: Vector3}] for manual collision
+# Slot gates require checking the player's rail-local offset, not world AABB,
+# because the rail curves and the walls rotate with it. Entries:
+#   {dist: float, gap_half: float, wall_half_width: float, wall_half_height: float}
+var slot_gates: Array = []
 
 # ── Persistent state across scenes (solar map progress) ──
 var current_level_id: String = ""
 var beaten_levels: Dictionary = {}   # level_id → {hits: int, score: int}
 var total_score: int = 0
 var lives: int = 3
+
+# ── Squad state (persists into boss fight) ──
+# Set to true if the player fails to save a teammate during an escort section;
+# the lost teammate sits out the next boss encounter.
+var ally_kiro_lost: bool = false
+var ally_nyx_lost: bool = false
+var ally_bront_lost: bool = false
 
 
 func _ready():
@@ -32,6 +43,9 @@ func reset_campaign():
 	total_score = 0
 	lives = 3
 	current_level_id = ""
+	ally_kiro_lost = false
+	ally_nyx_lost = false
+	ally_bront_lost = false
 
 
 func _setup_ui_actions():

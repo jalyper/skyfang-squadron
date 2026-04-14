@@ -555,14 +555,43 @@ func _check_obstacle_collision():
 	if is_phasing or invuln_timer > 0 or is_dead:
 		return
 	var p := global_position
-	# Player half-extents (matches collision shape: 1.2 x 0.4 x 1.5)
-	var ph := Vector3(0.6, 0.2, 0.75)
+	# Player half-extents depend on roll. Flat: wide + thin (1.2 x 0.4 x 1.5).
+	# Rolled to ±90° (holding L1/R1): tall + narrow (0.4 x 1.2 x 1.5) — this is
+	# what lets the ship fit through vertical slot gates.
+	var roll_norm: float = clampf(absf(tilt_current) / (PI / 2.0), 0.0, 1.0)
+	var ph := Vector3(
+		lerpf(0.6, 0.2, roll_norm),
+		lerpf(0.2, 0.6, roll_norm),
+		0.75,
+	)
 	for obs in GameManager.obstacle_aabbs:
 		var o: Vector3 = obs["pos"]
 		var h: Vector3 = obs["half"]
 		if absf(p.x - o.x) < (ph.x + h.x) and absf(p.y - o.y) < (ph.y + h.y) and absf(p.z - o.z) < (ph.z + h.z):
 			_die_explosion()
 			return
+
+	# Slot gates use path-local collision so they stay correct on curves.
+	var parent := get_parent()
+	if parent is PathFollow3D and GameManager.slot_gates.size() > 0:
+		var pf: PathFollow3D = parent
+		var rail_dist: float = pf.progress
+		var lx: float = position.x
+		var ly: float = position.y
+		for slot in GameManager.slot_gates:
+			var d_diff: float = absf(rail_dist - slot.dist)
+			if d_diff > (slot.wall_half_thick + ph.z):
+				continue
+			var gap_half: float = slot.gap_half
+			var ww: float = slot.wall_half_width
+			var wh: float = slot.wall_half_height
+			var left_center: float = -(gap_half + ww)
+			var right_center: float = gap_half + ww
+			var hit_left := absf(lx - left_center) < (ph.x + ww) and absf(ly) < (ph.y + wh)
+			var hit_right := absf(lx - right_center) < (ph.x + ww) and absf(ly) < (ph.y + wh)
+			if hit_left or hit_right:
+				_die_explosion()
+				return
 
 
 func _on_area_entered(area: Area3D):
