@@ -1,4 +1,6 @@
 # Skyfang Squadron
+![Skyfang Screenshot1](https://github.com/jalyper/skyfang-squadron/blob/master/skyfang-squadron-startscreen.png)
+![Skyfang Screenshot2](https://github.com/jalyper/skyfang-squadron/blob/master/skyfang2.png)
 
 An on-rails 3D arcade shooter inspired by Star Fox 64, built in **Godot 4.6**.
 
