@@ -68,4 +68,4 @@ GameWorld (Node3D)
 
 ## Status
 
-Prototype. See `SUMMARY.md` for current session notes and known issues.
+Prototype. See `HANDOFF.md` for the current state and next step.
