@@ -39,9 +39,12 @@ var shockwave_progress: float = 0.0  # 0-1 along the path
 var shockwave_speed: float = 14.0    # slightly slower than rail_speed — must boost to gain distance
 var shockwave_damage_dist: float = 8.0
 var shockwave_zones: Array = [
-	# [start_ratio, end_ratio] — sections where shockwave activates
-	[0.15, 0.30],   # Act 2 banking descent — boost through
-	[0.80, 0.93],   # Final approach asteroid field — boost out
+	# [start_ratio, end_ratio] — sections where shockwave activates.
+	# Total rail length ≈ 895 after the post-phase extension. Ratios
+	# tuned to land on (a) the Act 2 banking descent and (b) the final
+	# asteroid field at dist ~640-740.
+	[0.18, 0.27],   # Act 2 banking descent — boost through
+	[0.71, 0.83],   # Final approach asteroid field — boost out
 ]
 
 # Comms
@@ -52,7 +55,7 @@ var comms_fired: Dictionary = {}
 # Tutorials pause the game (rail slowdown) and show a prompt until the
 # player performs the taught action. One tutorial at a time.
 var tutorial_speed_mult: float = 1.0
-var tutorial_slow_factor: float = 0.05  # 5% rail speed while prompt is up
+var tutorial_slow_factor: float = 0.0  # rail fully frozen while prompt is up
 var tutorial_panel: PanelContainer = null
 var tutorial_label: Label = null
 var tutorial_tween: Tween = null
@@ -121,8 +124,13 @@ func _process(delta):
 		_on_level_complete()
 	_update_tutorials()
 	_check_comms_triggers()
-	_update_shockwave(delta)
-	_update_escort(delta)
+	# Shockwave + escort halt while a tutorial is up so the world doesn't
+	# advance underneath the player while they read the prompt. Without
+	# this, a frozen rail would still let the shockwave catch up or the
+	# escort timer drift.
+	if active_tutorial.is_empty():
+		_update_shockwave(delta)
+		_update_escort(delta)
 
 
 # ── Environment ───────────────────────────────────────────────
@@ -279,8 +287,8 @@ func _create_rail_path():
 		[Vector3(35, -20, -440),  -15.0], # climbing left-banked turn
 		[Vector3(5, -5, -510),    -8.0],  # turn exit
 		[Vector3(0, 0, -590),     0.0],   # escort section straight
-		[Vector3(0, 5, -680),     0.0],   # final gentle climb
-		[Vector3(0, 5, -770),     0.0],   # finish
+		[Vector3(0, 5, -680),     0.0],   # final gentle climb (post-megawreck)
+		[Vector3(0, 5, -870),     0.0],   # extended straight: barrel-roll teaching, gate 2, finish
 	]
 
 	for i in pts.size():
@@ -293,6 +301,18 @@ func _create_rail_path():
 		var in_t := -out_t
 		curve.add_point(p, in_t, out_t)
 		curve.set_point_tilt(i, deg_to_rad(tilt))
+
+	# Force the slot-gate approach segments to be dead-straight along -Z.
+	# Auto-computed Catmull-Rom tangents bleed lateral motion from
+	# neighbors (P2's bank, P8's climb) into "supposed-to-be-straight"
+	# segments, yawing the player during gate approach. Locking P1 and P9
+	# to pure -Z handles makes P0→P1 and P9→P10 perfect straights. The
+	# adjacent banking/climbing segments absorb the transition naturally.
+	var straight_handle := Vector3(0, 0, -22.5)
+	curve.set_point_in(1, -straight_handle)   # incoming from P0 along -Z
+	curve.set_point_out(1, straight_handle)   # outgoing toward P2 along -Z
+	curve.set_point_in(9, -straight_handle)   # incoming from P8 along -Z
+	curve.set_point_out(9, straight_handle)   # outgoing toward P10 along -Z
 
 	path.curve = curve
 	add_child(path)
@@ -528,8 +548,10 @@ func _spawn_model_obstacle(pos: Vector3, model_scene: PackedScene, scl: float, r
 
 
 func _spawn_megawreck(pos: Vector3, scl: float, rot_y: float):
-	# Massive destroyed starship — only the outer hull has collision, leaving
-	# the central cavity clear for the player to fly through.
+	# Massive destroyed starship that fully blocks the rail — the player
+	# is taught to phase through it via the "phase" tutorial. Two collision
+	# slabs meeting at the center cover the entire playable bounds, with a
+	# thin Z-depth so a single 1s phase clears the obstacle comfortably.
 	var container := Node3D.new()
 	container.position = pos
 
@@ -538,16 +560,15 @@ func _spawn_megawreck(pos: Vector3, scl: float, rot_y: float):
 	model.rotation_degrees.y = rot_y
 	container.add_child(model)
 
-	# The wreck is ~1.9 wide at scale 1, so at 45x it's ~85 units wide.
-	# Leave a gap in the center (~16 units) for the player to fly through.
-	var half_width: float = scl * 0.45
-	var gap: float = 8.0
-	var wall_width: float = half_width - gap
+	# Two slabs meet at x=0 — full coverage of the player's ±12 move bounds.
+	var half_width: float = scl * 0.45  # ≈20 at scl=45
+	var wall_width: float = half_width  # gap=0, slabs span from edge to center
 	var wall_height: float = scl * 0.5
-	var wall_depth: float = scl * 0.5
+	# Thin in Z so phase (~1s × 16 u/s = 16 units) clears with margin.
+	var wall_depth: float = 8.0
 
 	# Left hull wall
-	var l_pos := pos + Vector3(-(gap + wall_width / 2.0), 0, 0)
+	var l_pos := pos + Vector3(-(wall_width / 2.0), 0, 0)
 	var body_l := StaticBody3D.new()
 	body_l.position = l_pos
 	var shape_l := CollisionShape3D.new()
@@ -559,7 +580,7 @@ func _spawn_megawreck(pos: Vector3, scl: float, rot_y: float):
 	GameManager.obstacle_aabbs.append({"pos": l_pos, "half": Vector3(wall_width, wall_height, wall_depth) * 0.5})
 
 	# Right hull wall
-	var r_pos := pos + Vector3(gap + wall_width / 2.0, 0, 0)
+	var r_pos := pos + Vector3(wall_width / 2.0, 0, 0)
 	var body_r := StaticBody3D.new()
 	body_r.position = r_pos
 	var shape_r := CollisionShape3D.new()
@@ -570,15 +591,7 @@ func _spawn_megawreck(pos: Vector3, scl: float, rot_y: float):
 	container.add_child(body_r)
 	GameManager.obstacle_aabbs.append({"pos": r_pos, "half": Vector3(wall_width, wall_height, wall_depth) * 0.5})
 
-	# Collectible inside the cavity — double shot powerup
-	var pickup := Area3D.new()
-	pickup.set_script(PickupScript)
-	pickup.pickup_type = PickupScript.PickupType.DOUBLE_SHOT
-	pickup.position = Vector3(0, 0, 0)
-	pickup.lifetime = 999.0
-	container.add_child(pickup)
-
-	# Atmospheric light inside the cavity
+	# Atmospheric light at the center to highlight where the player phases through
 	var inner_light := OmniLight3D.new()
 	inner_light.position = Vector3(0, 0, 0)
 	inner_light.light_color = Color(0.3, 0.8, 0.4)
@@ -641,8 +654,8 @@ func _create_slot_gates():
 	# makes threading the gap much harder. Currently that's only the intro
 	# straight (P0→P1) and the final approach (P8→P10).
 	var gates := [
-		60,   # intro straight — introduces the mechanic
-		700,  # final approach — skill check
+		60,   # intro straight (P0→P1, locked straight) — introduces the mechanic
+		830,  # final approach (P9→P10, locked straight) — skill check after barrel-roll section
 	]
 	for d in gates:
 		_spawn_slot_gate(float(d))
@@ -650,6 +663,21 @@ func _create_slot_gates():
 
 func _spawn_slot_gate(dist: float):
 	var t: Transform3D = _rail_transform(dist)
+
+	# Build a level basis at the gate: forward matches the rail tangent
+	# (so the gate is broadside to the player's approach), but up is world
+	# Y (so the slot is perfectly vertical). This eliminates the small
+	# Catmull-Rom roll bleed that would otherwise tilt the slot relative
+	# to the player's horizon. The player's roll input rotates around
+	# rail-forward, which on a near-straight section is essentially the
+	# same axis, so a 90° roll cleanly aligns the ship with the slot.
+	var back_axis: Vector3 = t.basis.z.normalized()
+	var right_axis: Vector3 = Vector3.UP.cross(back_axis)
+	if right_axis.length() < 0.0001:
+		right_axis = t.basis.x  # fall back if rail somehow points straight up
+	right_axis = right_axis.normalized()
+	var up_axis: Vector3 = back_axis.cross(right_axis).normalized()
+	var level_basis := Basis(right_axis, up_axis, back_axis)
 
 	# Walls must fully cover the player's move_bounds (±12 x, ±5 y) so the
 	# only way past is through the narrow vertical slit in the middle. Gap
@@ -659,24 +687,27 @@ func _spawn_slot_gate(dist: float):
 	var wall_height: float = 12.0  # taller than the y=±5 bounds
 	var wall_thick: float = 1.0
 
-	# Register the slot gate for LOCAL-space collision. Player checks its
-	# own path-local position against these parameters in _check_obstacle_collision.
+	# Register the gate in WORLD space using the level basis. The player
+	# projects its world position into this frame for collision so the
+	# hit test matches what the player sees on-screen.
 	GameManager.slot_gates.append({
 		"dist": dist,
+		"world_origin": t.origin,
+		"world_basis": level_basis,
 		"gap_half": gap_half,
 		"wall_half_width": wall_width * 0.5,
 		"wall_half_height": wall_height * 0.5,
 		"wall_half_thick": wall_thick * 0.5,
 	})
 
-	# Visual walls — oriented to the rail basis so they bracket the path
+	# Visual walls — oriented to the level basis so the slot is upright
 	var left_local := Vector3(-(gap_half + wall_width / 2.0), 0, 0)
-	var left_pos: Vector3 = t * left_local
-	_spawn_slot_visual(Transform3D(t.basis, left_pos), Vector3(wall_width, wall_height, wall_thick))
+	var left_pos: Vector3 = t.origin + level_basis * left_local
+	_spawn_slot_visual(Transform3D(level_basis, left_pos), Vector3(wall_width, wall_height, wall_thick))
 
 	var right_local := Vector3(gap_half + wall_width / 2.0, 0, 0)
-	var right_pos: Vector3 = t * right_local
-	_spawn_slot_visual(Transform3D(t.basis, right_pos), Vector3(wall_width, wall_height, wall_thick))
+	var right_pos: Vector3 = t.origin + level_basis * right_local
+	_spawn_slot_visual(Transform3D(level_basis, right_pos), Vector3(wall_width, wall_height, wall_thick))
 
 
 func _spawn_slot_visual(xform: Transform3D, size: Vector3):
@@ -748,6 +779,7 @@ func _create_enemies():
 		[ 60, 2, 4.0],  # Act 1 intro ambush
 		[170, 2, 4.0],  # descent wave
 		[420, 3, 4.0],  # post-climbing turn
+		[745, 3, 5.0],  # post-phase: live fire for the barrel-roll lesson
 	]
 	for wave in waves:
 		var dist: float = float(wave[0])
@@ -783,6 +815,16 @@ func _create_pickups():
 		pickup.lifetime = 999.0
 		hazards_container.add_child(pickup)
 
+	# Double-shot reward placed just past the megawreck (dist 660, depth ±4)
+	# so the player can grab it the instant phase ends — visible payoff for
+	# committing to the phase-through.
+	var ds := Area3D.new()
+	ds.set_script(PickupScript)
+	ds.pickup_type = PickupScript.PickupType.DOUBLE_SHOT
+	ds.position = _rail_pos(685, 0, 0)
+	ds.lifetime = 999.0
+	hazards_container.add_child(ds)
+
 
 # ── UI ────────────────────────────────────────────────────────
 
@@ -808,29 +850,37 @@ func _create_ui():
 # ── Squad Comms Triggers ──────────────────────────────────────
 
 func _setup_comms_triggers():
+	# Triggers fire when path_follow.progress (absolute rail distance, in
+	# baked length units) crosses the threshold. Distances are aligned to
+	# concrete level features so dialogue lines up with what the player
+	# is actually seeing/about-to-see — not arbitrary timing.
+	# Reference points: gate 1 = 60, P2 bank start = ~164, P5 slot run end =
+	# ~383, P6 climb turn = ~457, escort start ~437, gate 2 = 730, end = ~795.
 	comms_triggers = [
-		# Act 1: Intro city
-		{"at": 0.02, "who": "Nyx",   "say": "City ahead. Stay tight through the skyline.",                 "clr": Color(0.9, 0.5, 0.2)},
-		{"at": 0.09, "who": "Kiro",  "say": "Fighters! Let's see who drops more.",                          "clr": Color(0.6, 0.6, 0.7)},
-		# Act 2: Banked descent
-		{"at": 0.18, "who": "Bront", "say": "Bank right and dive — I've got your six.",                     "clr": Color(0.6, 0.4, 0.2)},
-		# Act 3: Slot gates
-		{"at": 0.32, "who": "Nyx",   "say": "Slot gates! Roll your ship sideways to thread them.",          "clr": Color(0.9, 0.5, 0.2)},
-		{"at": 0.42, "who": "Kiro",  "say": "Nice flying. Try not to get too comfortable.",                 "clr": Color(0.6, 0.6, 0.7)},
-		# Act 4: Climbing turn
-		{"at": 0.52, "who": "Bront", "say": "Climbing out. Watch the wrecks on the turn.",                  "clr": Color(0.6, 0.4, 0.2)},
-		# (Escort section comms are event-driven from _update_escort,
-		#  triggered when Kiro enters view and when chasers are cleared.)
-		# Final approach
-		{"at": 0.85, "who": "Bront", "say": "Final stretch. Asteroid field — stay sharp.",                  "clr": Color(0.6, 0.4, 0.2)},
-		{"at": 0.95, "who": "Nyx",   "say": "Almost through. We've got this, pack.",                        "clr": Color(0.9, 0.5, 0.2)},
+		# Intro city, fires shortly after the tutorials release the rail.
+		{"at": 15.0,  "who": "Nyx",   "say": "City ahead. Stay tight through the skyline.",     "clr": Color(0.9, 0.5, 0.2)},
+		# Heads-up ~25 units before slot gate 1 so the player can commit.
+		{"at": 35.0,  "who": "Nyx",   "say": "Slot gate incoming — roll sideways to thread it.", "clr": Color(0.9, 0.5, 0.2)},
+		# Right before P2 (dist 164) where the banking descent begins.
+		{"at": 130.0, "who": "Bront", "say": "Bank right and dive — I've got your six.",         "clr": Color(0.6, 0.4, 0.2)},
+		# Through the slot-run straight, breather line.
+		{"at": 320.0, "who": "Kiro",  "say": "Nice flying. Try not to get too comfortable.",     "clr": Color(0.6, 0.6, 0.7)},
+		# Approaching P6 (dist 457) — climbing left-banked turn.
+		{"at": 425.0, "who": "Bront", "say": "Climbing out. Watch the wrecks on the turn.",      "clr": Color(0.6, 0.4, 0.2)},
+		# (Escort section comms are event-driven in _update_escort.)
+		# Final asteroid field begins ~640.
+		{"at": 615.0, "who": "Bront", "say": "Final stretch. Asteroid field — stay sharp.",      "clr": Color(0.6, 0.4, 0.2)},
+		# Heads-up before slot gate 2 (dist 830).
+		{"at": 800.0, "who": "Nyx",   "say": "One more gate. Show them how it's done.",          "clr": Color(0.9, 0.5, 0.2)},
+		# Last beat before the finish (dist ~895).
+		{"at": 870.0, "who": "Nyx",   "say": "Almost through. We've got this, pack.",            "clr": Color(0.9, 0.5, 0.2)},
 	]
 
 
 func _check_comms_triggers():
 	for t in comms_triggers:
 		var key = str(t["at"])
-		if not comms_fired.has(key) and path_follow.progress_ratio >= t["at"]:
+		if not comms_fired.has(key) and path_follow.progress >= t["at"]:
 			comms_fired[key] = true
 			if squad_comms and squad_comms.has_method("show_message"):
 				squad_comms.show_message(t["who"], t["say"], t["clr"])
@@ -1299,9 +1349,31 @@ func _setup_tutorials():
 			"message": "HOLD L1 OR R1\nTO FLY SIDEWAYS",
 		},
 		{
+			"id": "boost",
+			"trigger": "shockwave_active",  # fires the moment a shockwave spawns
+			"message": "SHOCKWAVE INCOMING!\nHOLD A / SHIFT TO BOOST",
+		},
+		{
 			"id": "missile",
 			"trigger": "escort_holding",  # fires once Kiro is under attack
 			"message": "HOLD X TO LOCK ON\nPRESS Y TO CYCLE TARGETS\nRELEASE X TO FIRE",
+		},
+		{
+			"id": "phase",
+			# Phase lasts ~1s × 16 u/s = 16 units of travel, and the megawreck
+			# collision spans dist 656-664. Triggering at 650 means phase
+			# covers 650-666 — fully through the wreck with ~6 units of
+			# lead-in and ~2 units of exit margin.
+			"trigger_dist": 650.0,
+			"message": "WRECKAGE BLOCKING THE PATH!\nPRESS B / F TO PHASE THROUGH",
+		},
+		{
+			"id": "barrel",
+			# Fires after the post-wreck pickup and before the enemy wave at
+			# dist 745 — player learns barrel roll then immediately uses it
+			# to deflect incoming fire.
+			"trigger_dist": 715.0,
+			"message": "DOUBLE-TAP L1 OR R1\nTO BARREL ROLL\n(deflects enemy fire)",
 		},
 	]
 	_spawn_tutorial_enemies()
@@ -1387,10 +1459,14 @@ func _update_tutorials():
 			var can_trigger := false
 			if next_tut.has("trigger_ratio"):
 				can_trigger = path_follow.progress_ratio >= float(next_tut.trigger_ratio)
+			elif next_tut.has("trigger_dist"):
+				can_trigger = path_follow.progress >= float(next_tut.trigger_dist)
 			elif next_tut.get("trigger", "") == "enemies_cleared":
 				can_trigger = tutorial_enemies_cleared
 			elif next_tut.get("trigger", "") == "escort_holding":
 				can_trigger = escort_phase == EscortPhase.HOLDING
+			elif next_tut.get("trigger", "") == "shockwave_active":
+				can_trigger = shockwave_active
 			if can_trigger:
 				_start_tutorial(next_tut)
 	else:
@@ -1401,6 +1477,14 @@ func _update_tutorials():
 func _start_tutorial(tut: Dictionary):
 	active_tutorial = tut
 	tutorial_speed_mult = tutorial_slow_factor
+	# Freeze enemy AI and in-flight projectiles so the tutorial isn't
+	# undermined by hostile fire while the player is reading the prompt.
+	# Player ship + HUD keep processing so tutorial completion checks
+	# (input, tilt, shots fired) still work.
+	if enemies_container:
+		enemies_container.process_mode = Node.PROCESS_MODE_DISABLED
+	if projectiles_container:
+		projectiles_container.process_mode = Node.PROCESS_MODE_DISABLED
 	tutorial_label.text = tut.message
 	tutorial_panel.visible = true
 	if tutorial_tween and tutorial_tween.is_valid():
@@ -1411,6 +1495,10 @@ func _start_tutorial(tut: Dictionary):
 
 func _complete_tutorial():
 	tutorial_speed_mult = 1.0
+	if enemies_container:
+		enemies_container.process_mode = Node.PROCESS_MODE_INHERIT
+	if projectiles_container:
+		projectiles_container.process_mode = Node.PROCESS_MODE_INHERIT
 	active_tutorial = {}
 	tutorial_index += 1
 	if tutorial_tween and tutorial_tween.is_valid():
@@ -1435,5 +1523,21 @@ func _is_tutorial_done(id: String) -> bool:
 			# animation actually plays — otherwise the tutorial slowdown
 			# would make the player think the mechanic is stuck.
 			return player != null and Input.is_action_pressed("tracking_missile")
+		"boost":
+			# Player must hold boost. The button stays held as the rail
+			# unfreezes, so the boost engages on the same frame the freeze
+			# ends — feels like "smash boost to escape the shockwave."
+			return Input.is_action_pressed("boost")
+		"phase":
+			# Phase fires once and lasts ~1s. Complete on the press so the
+			# activation in player_ship._handle_phase happens on the same
+			# frame the freeze ends, giving the player full phase duration
+			# to fly through the wreck.
+			return Input.is_action_just_pressed("phase") or (player != null and player.is_phasing)
+		"barrel":
+			# Triggered by a double-tap of tilt; player_ship sets
+			# barrel_rolling=true on the second tap. Real-time-driven so
+			# the double-tap detection works even with the rail frozen.
+			return player != null and player.barrel_rolling
 		_:
 			return true

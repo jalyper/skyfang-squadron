@@ -49,6 +49,7 @@ var total_shots_fired: int = 0
 var double_shot: bool = false
 var double_shot_timer: float = 0.0
 var double_shot_duration: float = 15.0
+var double_shot_pods: Array = []  # MeshInstance3D wing-mounted indicator pods
 var laser_energy: float = 100.0
 var max_laser_energy: float = 100.0
 var laser_drain_rate: float = 33.33    # depletes full bar in ~3 sec of continuous fire
@@ -107,7 +108,6 @@ var is_flashing: bool = false
 # ── Score / Hits / Lives ──
 var score: int = 0
 var hit_count: int = 0
-var lives: int = 3
 
 # ── Node refs ──
 var ship_visual: Node3D
@@ -123,7 +123,6 @@ signal boost_changed(val: float, val_max: float)
 signal missiles_changed(count: int)
 signal score_changed(pts: int)
 signal hits_changed(count: int)
-signal lives_changed(count: int)
 signal laser_energy_changed(val: float, val_max: float)
 signal phase_changed(is_active: bool, cooldown_ratio: float)
 signal ship_destroyed
@@ -164,6 +163,7 @@ func _process(delta):
 		double_shot_timer -= delta
 		if double_shot_timer <= 0:
 			double_shot = false
+			_clear_double_shot_pods()
 	# Clean up locked targets that have been destroyed
 	var valid: Array = []
 	for t in locked_targets:
@@ -260,8 +260,6 @@ func _handle_snap_target():
 	var cam := get_viewport().get_camera_3d()
 	if cam == null:
 		return
-
-	var screen_center := get_viewport().get_visible_rect().size / 2.0
 
 	# Collect all visible enemies sorted by distance
 	var candidates: Array = []
@@ -362,8 +360,69 @@ func _safe_up(dir: Vector3) -> Vector3:
 
 
 func activate_double_shot():
+	var was_active := double_shot
 	double_shot = true
 	double_shot_timer = double_shot_duration
+	# Spawn the wing-pod indicators on the first activation only; if the
+	# player picks up another double-shot while one is already active, the
+	# pods stay (timer resets above) and they get a quick re-equip flash.
+	if not was_active:
+		_spawn_double_shot_pods()
+	else:
+		_pulse_double_shot_pods()
+
+
+func _spawn_double_shot_pods():
+	_clear_double_shot_pods()
+	# Pods sit on the ship's wingtips, matching the lateral muzzle offsets
+	# in _handle_shooting (±0.32 along ship-local x). They're parented to
+	# ship_visual so they roll/pitch/yaw with the gimbal.
+	var offsets := [Vector3(-0.32, 0.0, -0.4), Vector3(0.32, 0.0, -0.4)]
+	for off in offsets:
+		var pod := MeshInstance3D.new()
+		var mesh := CapsuleMesh.new()
+		mesh.radius = 0.07
+		mesh.height = 0.55
+		pod.mesh = mesh
+		pod.position = off
+		pod.rotation.x = PI / 2.0  # capsule's long axis along ship -Z
+		pod.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(0.2, 1.0, 0.5)
+		mat.emission_enabled = true
+		mat.emission = Color(0.2, 1.0, 0.5)
+		mat.emission_energy_multiplier = 5.0
+		pod.material_override = mat
+		ship_visual.add_child(pod)
+		double_shot_pods.append(pod)
+		# Pop-in: scale up from zero for a snappy "equipped" feel.
+		pod.scale = Vector3.ZERO
+		var t := create_tween()
+		t.tween_property(pod, "scale", Vector3.ONE, 0.25)\
+			.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+
+
+func _pulse_double_shot_pods():
+	for pod in double_shot_pods:
+		if not is_instance_valid(pod):
+			continue
+		var mat: StandardMaterial3D = pod.material_override
+		if mat == null:
+			continue
+		var t := create_tween()
+		mat.emission_energy_multiplier = 12.0
+		t.tween_property(mat, "emission_energy_multiplier", 5.0, 0.4)\
+			.set_ease(Tween.EASE_OUT)
+
+
+func _clear_double_shot_pods():
+	for pod in double_shot_pods:
+		if is_instance_valid(pod):
+			var t := create_tween()
+			t.tween_property(pod, "scale", Vector3.ZERO, 0.2)\
+				.set_ease(Tween.EASE_IN)
+			t.tween_callback(pod.queue_free)
+	double_shot_pods.clear()
 
 
 func heal(amount: float):
@@ -679,24 +738,27 @@ func _check_obstacle_collision():
 			_die_explosion()
 			return
 
-	# Slot gates use path-local collision so they stay correct on curves.
+	# Slot gates: project the player's world position into the gate's
+	# level basis so collision matches the upright on-screen visual.
 	var parent := get_parent()
 	if parent is PathFollow3D and GameManager.slot_gates.size() > 0:
 		var pf: PathFollow3D = parent
 		var rail_dist: float = pf.progress
-		var lx: float = position.x
-		var ly: float = position.y
 		for slot in GameManager.slot_gates:
-			var d_diff: float = absf(rail_dist - slot.dist)
-			if d_diff > (slot.wall_half_thick + ph.z):
+			# Cheap rail-distance early-out before doing the basis projection
+			if absf(rail_dist - slot.dist) > 30.0:
+				continue
+			var basis_t: Basis = slot.world_basis
+			var local: Vector3 = basis_t.transposed() * (p - slot.world_origin)
+			if absf(local.z) > (slot.wall_half_thick + ph.z):
 				continue
 			var gap_half: float = slot.gap_half
 			var ww: float = slot.wall_half_width
 			var wh: float = slot.wall_half_height
 			var left_center: float = -(gap_half + ww)
 			var right_center: float = gap_half + ww
-			var hit_left := absf(lx - left_center) < (ph.x + ww) and absf(ly) < (ph.y + wh)
-			var hit_right := absf(lx - right_center) < (ph.x + ww) and absf(ly) < (ph.y + wh)
+			var hit_left := absf(local.x - left_center) < (ph.x + ww) and absf(local.y) < (ph.y + wh)
+			var hit_right := absf(local.x - right_center) < (ph.x + ww) and absf(local.y) < (ph.y + wh)
 			if hit_left or hit_right:
 				_die_explosion()
 				return

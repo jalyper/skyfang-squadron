@@ -77,9 +77,20 @@ func _play_collect_animation():
 	set_deferred("monitorable", false)
 
 	var player = GameManager.player
-	var target_pos: Vector3 = player.global_position if player and is_instance_valid(player) else global_position
+	if player == null or not is_instance_valid(player):
+		queue_free()
+		return
 
-	# Phase 1: Rapid spin + shrink toward player (0.35 sec)
+	# Reparent the pickup onto the ship so it travels with the player as
+	# the rail carries them forward. Without this, the converge tween
+	# targets a stale snapshot of the ship's position and the visual is
+	# left behind in 0.35s of forward flight (~25+ units at cruise speed).
+	# reparent() keeps the world transform stable across the swap, so the
+	# pickup pops to the same on-screen spot but in player-local space —
+	# from there a tween to Vector3.ZERO pulls it onto the ship cleanly.
+	reparent(player)
+
+	# Phase 1: Rapid spin + shrink onto the ship's center (0.35 sec).
 	var tween := create_tween()
 	tween.set_parallel(true)
 
@@ -91,8 +102,9 @@ func _play_collect_animation():
 	# Shrink to nothing
 	tween.tween_property(self, "scale", Vector3(0.05, 0.05, 0.05), 0.35).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_BACK)
 
-	# Fly toward player position
-	tween.tween_property(self, "global_position", target_pos, 0.3).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	# Pull onto the ship using local position so the pickup follows the
+	# ship's forward motion instead of trailing behind it.
+	tween.tween_property(self, "position", Vector3.ZERO, 0.3).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
 
 	tween.set_parallel(false)
 	tween.tween_callback(_spawn_collect_flash)
@@ -113,31 +125,44 @@ func _spawn_collect_flash():
 		PickupType.SHIELD:
 			flash_color = Color(0.5, 0.8, 1.0)
 
-	# Bright flash sphere
-	var flash := MeshInstance3D.new()
-	var fmesh := SphereMesh.new()
-	fmesh.radius = 0.8
-	fmesh.height = 1.6
-	flash.mesh = fmesh
-	flash.position = flash_pos
-	flash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var fmat := StandardMaterial3D.new()
-	fmat.albedo_color = Color(flash_color.r, flash_color.g, flash_color.b, 0.9)
-	fmat.emission_enabled = true
-	fmat.emission = flash_color
-	fmat.emission_energy_multiplier = 10.0
-	fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	fmat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	flash.material_override = fmat
-	gw.add_child(flash)
+	# Shield pickups skip the bright flash sphere — it would obstruct the
+	# ship at the moment we want the player looking at it. The shield-bubble
+	# below covers the "energy hits the ship" beat instead.
+	var flash: MeshInstance3D = null
+	var fmat: StandardMaterial3D = null
+	if pickup_type != PickupType.SHIELD:
+		flash = MeshInstance3D.new()
+		var fmesh := SphereMesh.new()
+		fmesh.radius = 0.8
+		fmesh.height = 1.6
+		flash.mesh = fmesh
+		flash.position = flash_pos
+		flash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		fmat = StandardMaterial3D.new()
+		fmat.albedo_color = Color(flash_color.r, flash_color.g, flash_color.b, 0.9)
+		fmat.emission_enabled = true
+		fmat.emission = flash_color
+		fmat.emission_energy_multiplier = 10.0
+		fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		fmat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		flash.material_override = fmat
+		gw.add_child(flash)
 
-	# Flash light
+	# Flash light — kept for both types as a brief environment pulse.
 	var light := OmniLight3D.new()
 	light.position = flash_pos
 	light.light_color = flash_color
 	light.light_energy = 6.0
 	light.omni_range = 12.0
 	gw.add_child(light)
+
+	# Translucent shield bubble for shield pickups — gives the impression
+	# that an invisible spherical shield around the ship just got
+	# recharged. Parented to the player so it travels with the ship as
+	# the rail carries them forward, and so the bubble is centered on the
+	# hull regardless of where the pickup was sitting.
+	if pickup_type == PickupType.SHIELD:
+		_spawn_shield_bubble(flash_color)
 
 	# Twinkle particles — small bright dots that scatter outward
 	var twinkles: Array[MeshInstance3D] = []
@@ -173,9 +198,10 @@ func _spawn_collect_flash():
 	# Animate flash + twinkles
 	var ft := gw.create_tween()
 	ft.set_parallel(true)
-	# Flash expands and fades
-	ft.tween_property(flash, "scale", Vector3(5, 5, 5), 0.3).set_ease(Tween.EASE_OUT)
-	ft.tween_property(fmat, "albedo_color:a", 0.0, 0.3)
+	# Flash expands and fades (only present for non-shield pickups)
+	if flash != null:
+		ft.tween_property(flash, "scale", Vector3(5, 5, 5), 0.3).set_ease(Tween.EASE_OUT)
+		ft.tween_property(fmat, "albedo_color:a", 0.0, 0.3)
 	ft.tween_property(light, "light_energy", 0.0, 0.35)
 
 	# Twinkles fly outward and fade
@@ -189,11 +215,123 @@ func _spawn_collect_flash():
 
 	ft.set_parallel(false)
 	ft.tween_callback(func():
-		flash.queue_free()
-		light.queue_free()
+		if flash != null and is_instance_valid(flash):
+			flash.queue_free()
+		if is_instance_valid(light):
+			light.queue_free()
 		for tw in twinkles:
 			if is_instance_valid(tw):
 				tw.queue_free()
+	)
+
+
+func _spawn_shield_bubble(color: Color):
+	# A faceted, semi-translucent dome that envelops the ship for ~0.7s
+	# then fades. Two layers: an inner additive sphere that suggests
+	# energy filling the shield volume, and an outer hex-wireframe shell
+	# (CULL_FRONT on a low-poly sphere reveals the inside-facing edges as
+	# bright facet seams) that traces the shield boundary like rim light.
+	# Parented to the player so it follows the ship through the rail.
+	var player = GameManager.player
+	if player == null or not is_instance_valid(player):
+		return
+
+	# Inner translucent envelope — sized to just envelop the hull, not
+	# eclipse the screen. Ship is roughly 2 wide × 2.5 long, so a 1.3
+	# radius dome reads as a snug personal shield.
+	var inner := MeshInstance3D.new()
+	var imesh := SphereMesh.new()
+	imesh.radius = 1.3
+	imesh.height = 2.6
+	imesh.radial_segments = 16
+	imesh.rings = 10
+	inner.mesh = imesh
+	inner.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var imat := StandardMaterial3D.new()
+	imat.albedo_color = Color(color.r, color.g, color.b, 0.10)
+	imat.emission_enabled = true
+	imat.emission = color
+	imat.emission_energy_multiplier = 0.8
+	imat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	imat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	imat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	inner.material_override = imat
+	player.add_child(inner)
+
+	# Outer faceted wireframe — the visible "shield surface" cells.
+	var outer := MeshInstance3D.new()
+	var omesh := SphereMesh.new()
+	omesh.radius = 1.45
+	omesh.height = 2.9
+	omesh.radial_segments = 8   # hex-style facets, echoes the pickup mesh
+	omesh.rings = 5
+	outer.mesh = omesh
+	outer.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var omat := StandardMaterial3D.new()
+	omat.albedo_color = Color(color.r, color.g, color.b, 0.35)
+	omat.emission_enabled = true
+	omat.emission = color
+	omat.emission_energy_multiplier = 2.5
+	omat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	omat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	omat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	omat.cull_mode = BaseMaterial3D.CULL_FRONT  # show inside-facing facet seams
+	outer.material_override = omat
+	player.add_child(outer)
+
+	inner.scale = Vector3(0.15, 0.15, 0.15)
+	outer.scale = Vector3(0.15, 0.15, 0.15)
+
+	# Surface shimmer: rotate the faceted shell across the bubble's
+	# lifetime. The low-poly seams sweep around the sphere — visually
+	# it reads as light playing across a force-field surface. A second
+	# axis of rotation on the inner sphere adds a subtle counter-drift
+	# so the two layers never stay aligned. Both tweens are bound to
+	# the meshes so they auto-cancel on free.
+	var rot_outer := outer.create_tween()
+	rot_outer.tween_property(outer, "rotation:y", TAU * 0.55, 0.95)\
+		.set_trans(Tween.TRANS_LINEAR)
+	var rot_inner := inner.create_tween()
+	rot_inner.set_parallel(true)
+	rot_inner.tween_property(inner, "rotation:y", -TAU * 0.35, 0.95)\
+		.set_trans(Tween.TRANS_LINEAR)
+	rot_inner.tween_property(inner, "rotation:x", TAU * 0.2, 0.95)\
+		.set_trans(Tween.TRANS_LINEAR)
+
+	var t := player.create_tween()
+	# Phase 1: pop in — bubble expands rapidly with a slight back-ease
+	# overshoot, like the shield snapping into place.
+	t.set_parallel(true)
+	t.tween_property(inner, "scale", Vector3.ONE, 0.22).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	t.tween_property(outer, "scale", Vector3.ONE, 0.22).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	t.chain()
+
+	# Phase 2: shimmer pulses on the outer shell's emission — three quick
+	# bright/dim cycles read as light flickering across the surface. The
+	# rotating seams (above) carry that flicker around the sphere.
+	t.set_parallel(false)
+	t.tween_property(omat, "emission_energy_multiplier", 5.5, 0.07)
+	t.tween_property(omat, "emission_energy_multiplier", 2.2, 0.09)
+	t.tween_property(omat, "emission_energy_multiplier", 5.0, 0.07)
+	t.tween_property(omat, "emission_energy_multiplier", 2.0, 0.09)
+	t.chain()
+
+	# Phase 3: linger then fade — alpha + emission to zero while scale
+	# expands a touch (the dissipating-shield feel). Done in parallel so
+	# the bubble fades away without snapping out.
+	t.set_parallel(true)
+	t.tween_property(imat, "albedo_color:a", 0.0, 0.4).set_ease(Tween.EASE_IN)
+	t.tween_property(imat, "emission_energy_multiplier", 0.0, 0.4).set_ease(Tween.EASE_IN)
+	t.tween_property(omat, "albedo_color:a", 0.0, 0.4).set_ease(Tween.EASE_IN)
+	t.tween_property(omat, "emission_energy_multiplier", 0.0, 0.4).set_ease(Tween.EASE_IN)
+	t.tween_property(inner, "scale", Vector3(1.18, 1.18, 1.18), 0.4).set_ease(Tween.EASE_OUT)
+	t.tween_property(outer, "scale", Vector3(1.22, 1.22, 1.22), 0.4).set_ease(Tween.EASE_OUT)
+
+	t.chain().tween_callback(func():
+		if is_instance_valid(inner):
+			inner.queue_free()
+		if is_instance_valid(outer):
+			outer.queue_free()
 	)
 
 
@@ -318,6 +456,8 @@ func _build_shield_visual():
 func _build_collision():
 	var col := CollisionShape3D.new()
 	var shape := SphereShape3D.new()
-	shape.radius = 1.5
+	# Generous grab radius — pickups feel cheap if you have to thread them
+	# at speed. The player only needs to fly within ~3 units to collect.
+	shape.radius = 3.0
 	col.shape = shape
 	add_child(col)
