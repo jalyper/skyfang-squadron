@@ -20,6 +20,11 @@ var threat_bar: ProgressBar
 var threat_label: Label
 var threat_container: VBoxContainer
 
+# Track previous health so heal-vs-damage transitions can drive a brief
+# brighter-green pulse on the shield fill.
+var _prev_health: float = -1.0
+var _shield_pulse_tween: Tween = null
+
 # Boost speed lines
 var speed_line_data: Array = []
 var NUM_SPEED_LINES := 40
@@ -70,13 +75,12 @@ func _connect_player():
 		p.score_changed.connect(_on_score)
 	if p.has_signal("hits_changed"):
 		p.hits_changed.connect(_on_hits)
-	if p.has_signal("lives_changed"):
-		p.lives_changed.connect(_on_lives)
 	if p.has_signal("phase_changed"):
 		p.phase_changed.connect(_on_phase)
-	# Initialize lives display
-	if lives_label and "lives" in p:
-		lives_label.text = "x %d" % p.lives
+	# Lives are owned by GameManager — game_world updates the count on
+	# death/respawn. The HUD just snapshots it on level start.
+	if lives_label:
+		lives_label.text = "x %d" % GameManager.lives
 
 
 # ── Crosshair (fixed at screen center) ────────────────────────
@@ -529,17 +533,34 @@ func _build_phase_indicator():
 func _on_health(hp: float, hp_max: float):
 	if health_bar == null:
 		return
+	var prev := _prev_health
+	_prev_health = hp
 	health_bar.max_value = hp_max
 	health_bar.value = hp
 	var fill := health_bar.get_theme_stylebox("fill") as StyleBoxFlat
-	if fill:
-		var ratio := hp / hp_max
-		if ratio > 0.5:
-			fill.bg_color = Color(0.2, 0.8, 0.3)
-		elif ratio > 0.25:
-			fill.bg_color = Color(1.0, 0.8, 0.1)
-		else:
-			fill.bg_color = Color(1.0, 0.2, 0.2)
+	if fill == null:
+		return
+	var ratio := hp / hp_max
+	var base_color: Color
+	if ratio > 0.5:
+		base_color = Color(0.2, 0.8, 0.3)
+	elif ratio > 0.25:
+		base_color = Color(1.0, 0.8, 0.1)
+	else:
+		base_color = Color(1.0, 0.2, 0.2)
+	fill.bg_color = base_color
+
+	# Healing pulse: when shield ticks up (pickup or regen), flash to a
+	# brighter, more saturated green and ease back to the base fill color.
+	# The pulse cancels any in-flight tween so rapid pickups still read.
+	if prev >= 0.0 and hp > prev + 0.01:
+		if _shield_pulse_tween and _shield_pulse_tween.is_valid():
+			_shield_pulse_tween.kill()
+		var pulse_color := Color(0.5, 1.0, 0.6)
+		fill.bg_color = pulse_color
+		_shield_pulse_tween = create_tween()
+		_shield_pulse_tween.tween_property(fill, "bg_color", base_color, 0.55)\
+			.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
 
 
 func _on_boost(val: float, val_max: float):
@@ -574,11 +595,6 @@ func _on_score(pts: int):
 func _on_hits(count: int):
 	if hits_label:
 		hits_label.text = "%03d" % count
-
-
-func _on_lives(count: int):
-	if lives_label:
-		lives_label.text = "x %d" % count
 
 
 func _on_phase(is_active: bool, ratio: float):

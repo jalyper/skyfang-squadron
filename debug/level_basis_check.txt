@@ -1,0 +1,2 @@
+dist=60.0  orig roll=+0.006Â°  level roll=-0.000Â°  orig up-tilt=0.563Â°  level up-tilt=0.563Â°
+dist=700.0  orig roll=-1.004Â°  level roll=-0.000Â°  orig up-tilt=2.000Â°  level up-tilt=1.729Â°

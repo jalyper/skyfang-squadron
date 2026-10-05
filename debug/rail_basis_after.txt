@@ -1,0 +1,26 @@
+baked length: 795.531
+P0 at world (0.0, 0.0, 0.0) â dist ~0.0 (err 0.00)
+P1 at world (0.0, 0.0, -90.0) â dist ~90.0 (err 0.00)
+P2 at world (20.0, -10.0, -160.0) â dist ~164.0 (err 0.03)
+P3 at world (50.0, -25.0, -230.0) â dist ~241.9 (err 0.00)
+P4 at world (55.0, -30.0, -300.0) â dist ~312.7 (err 0.04)
+P5 at world (55.0, -30.0, -370.0) â dist ~382.9 (err 0.05)
+P6 at world (35.0, -20.0, -440.0) â dist ~456.7 (err 0.03)
+P7 at world (5.0, -5.0, -510.0) â dist ~534.7 (err 0.00)
+P8 at world (0.0, 0.0, -590.0) â dist ~615.4 (err 0.03)
+P9 at world (0.0, 5.0, -680.0) â dist ~705.5 (err 0.03)
+P10 at world (0.0, 5.0, -770.0) â dist ~795.5 (err 0.03)
+--- basis at sampled distances ---
+dist=  30.0  pos=(  0.00,  0.00, -30.00)  yaw=+0.000  pitch=+0.000  roll=+0.000
+dist=  40.0  pos=(  0.00,  0.00, -40.00)  yaw=+0.000  pitch=+0.000  roll=+0.000
+dist=  50.0  pos=(  0.00,  0.00, -50.00)  yaw=+0.000  pitch=+0.000  roll=+0.000
+dist=  60.0  pos=(  0.00,  0.00, -60.00)  yaw=+0.000  pitch=+0.000  roll=+0.000
+dist=  70.0  pos=(  0.00,  0.00, -70.00)  yaw=+0.000  pitch=+0.000  roll=+0.000
+dist=  80.0  pos=(  0.00,  0.00, -80.00)  yaw=+0.000  pitch=+0.000  roll=+0.000
+dist=  90.0  pos=(  0.00,  0.00, -90.00)  yaw=+0.000  pitch=+0.000  roll=+0.000
+dist= 690.0  pos=( -0.14,  4.66,-664.47)  yaw=+0.871  pitch=-2.321  roll=-1.023
+dist= 705.0  pos=( -0.00,  5.00,-679.47)  yaw=+0.049  pitch=-0.100  roll=-1.009
+dist= 720.0  pos=(  0.00,  5.00,-694.47)  yaw=+0.000  pitch=+0.000  roll=-1.009
+dist= 730.0  pos=(  0.00,  5.00,-704.47)  yaw=+0.000  pitch=+0.000  roll=-1.009
+dist= 740.0  pos=(  0.00,  5.00,-714.47)  yaw=+0.000  pitch=+0.000  roll=-1.009
+dist= 750.0  pos=(  0.00,  5.00,-724.47)  yaw=+0.000  pitch=+0.000  roll=-1.009

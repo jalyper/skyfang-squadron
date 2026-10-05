@@ -85,10 +85,10 @@ func _build_stars():
 	star_particles.fixed_fps = 60
 	star_particles.local_coords = true
 	star_particles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	star_particles.position = Vector3(0, 0, 40)  # spawn far behind ships
+	star_particles.position = Vector3(0, 0, -10)  # spawn near camera
 
 	var proc := ParticleProcessMaterial.new()
-	proc.direction = Vector3(0, 0, -1)  # fly toward camera (-Z)
+	proc.direction = Vector3(0, 0, 1)  # fly away from camera (+Z)
 	proc.spread = 3.0
 	proc.initial_velocity_min = 20.0
 	proc.initial_velocity_max = 35.0

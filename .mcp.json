@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "godot": {
+      "command": "C:/Users/keato/.local/bin/uv.exe",
+      "args": [
+        "run",
+        "--directory",
+        "C:/Users/keato/repos/Claude-GoDot-MCP/python",
+        "python",
+        "-m",
+        "mcp_server"
+      ],
+      "env": {
+        "GODOT_HOST": "127.0.0.1",
+        "GDAI_MCP_SERVER_PORT": "3571",
+        "GDAI_RUNTIME_SERVER_PORT": "3572",
+        "AUTO_SCREENSHOT": "true"
+      }
+    }
+  }
+}
